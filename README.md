@@ -16,7 +16,7 @@ The architecture is based on **Erlang/OTP (version 27.2.4)** for its real-time c
 - **Pmod NAV**: for dimensional orientation (accelerometer + gyroscope)  
 - **Pmod SONAR**: for obstacle detection  
 
-> For more detailed information, see the [Wiki section](#) of this repository.
+> For more detailed information, see the [Wiki section](https://github.com/Artal44/Grisp_robot/wiki) of this repository.
 
 ---
 
