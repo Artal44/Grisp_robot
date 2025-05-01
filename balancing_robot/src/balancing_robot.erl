@@ -14,6 +14,8 @@ start(_Type, _Args) ->
     [grisp_led:flash(L, yellow, 500) || L <- [1, 2]],
 	_ = grisp:add_device(spi2, pmod_nav),
     pmod_nav:config(acc, #{odr_g => {hz,238}}),
+
+    _ = grisp:add_device(uart, pmod_maxsonar),
     numerl:init(),
     timer:sleep(2000),
     spawn(main_loop, robot_init, []),
