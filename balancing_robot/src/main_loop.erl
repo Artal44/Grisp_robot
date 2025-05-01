@@ -1,281 +1,291 @@
 -module(main_loop).
 
--export([robot_init/2, modify_frequency/1]).
+-export([robot_init/0]).
 
--define(RAD_TO_DEG, 180.0/math:pi()). % Conversion factor from radians to degrees
+-define(RAD_TO_DEG, 180.0/math:pi()).
+-define(DEG_TO_RAD, math:pi()/180.0).
 
--define(INCH_TO_CM, 2.54). % Conversion factor from inch to cm
+-define(ADV_V_MAX, 30.0).
+-define(TURN_V_MAX, 80.0).
 
--define(LOG_DURATION, 15000).
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% INITIALISATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+robot_init() ->
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Robot Initialization
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-robot_init(Hera_pid, _Role) ->
-
-    % Set maximum process priority for real-time critical tasks
     process_flag(priority, max),
 
-    % Initial timestamp [ms]
-    T0 = erlang:system_time() / 1.0e6,
+    calibrate(),
 
-    % Create ETS table for shared variables
-    % - 'variables' table (public, named) to store real-time global state
-    ets:new(variables, [set, public, named_table]),
-    ets:insert(variables, {"Freq_Goal", 300.0}),  % Initial loop frequency goal [Hz]
+    {X0, P0} = init_kalman(),
 
-    % Calibration of gyroscope offsets
-    io:format("[Robot] Calibrating... Do not move the pmod_nav!~n"),
-    grisp_led:color(1, {1, 0, 0}),  % LEDs red during calibration
-    grisp_led:color(2, {1, 0, 0}),
-    [_Gx0, Gy0, _Gz0] = helper_module:calibrate(),
-    io:format("[Robot] Done calibrating~n"),
-
-    % Initialize Kalman filter state
-    % - X0: State vector [angle, angular velocity, distance to obstacle]
-    % - P0: State covariance matrix
-    X0 = mat:matrix([[0], [0], [0]]),
-    P0 = mat:matrix([[0.1, 0, 0], [0, 0.1, 0], [0, 0, 0.1]]),
-
-    % Open I2C bus for communication with external devices (ESP32, etc.)
-    io:format("[Robot] Opening I2C bus...~n"),
+    %I2C bus
     I2Cbus = grisp_i2c:open(i2c1),
+    persistent_term:put(i2c, I2Cbus),
 
-    % Initialize PID controllers
-    % - Pid_Speed: PI controller for advance speed
-    % - Pid_Stability: PD controller for tilt stability
-    % - Pid_Obstacle_Avoidance: PI controller for slowing down when detecting obstacles
+    %PIDs initialisation
     Pid_Speed = spawn(pid_controller, pid_init, [-0.12, -0.07, 0.0, -1, 60.0, 0.0]),
     Pid_Stability = spawn(pid_controller, pid_init, [17.0, 0.0, 4.0, -1, -1, 0.0]),
-    Pid_Obstacle_Avoidance = spawn(pid_controller, pid_init, [-0.06, -0.02, 0.0, -1, 60.0, 0.0]),
+    persistent_term:put(controllers, {Pid_Speed, Pid_Stability}),
+    persistent_term:put(freq_goal, 300.0),
 
-    io:format("[Robot] Pid of the speed controller: ~p~n", [Pid_Speed]),
-    io:format("[Robot] Pid of the stability controller: ~p~n", [Pid_Stability]),
-    io:format("[Robot] Pid of the obstacle avoidance controller: ~p~n", [Pid_Obstacle_Avoidance]),
-    io:format("[Robot] Starting movement of the robot.~n"),
+    T0 = erlang:system_time()/1.0e6,
+    
+	io:format("[ROBOT] Robot ready.~n"),
 
-    % Launch main control loop with initial state
-    robot_main(
-        T0, Hera_pid,
-        {rest, false},            % Robot state (rest) and "robot up" flag (false)
-        {T0, X0, P0},              % Initial time, Kalman state, Kalman covariance
-        I2Cbus,                   % I2C communication bus
-        {0, T0, []},               % Logging: counter, end time, empty log list
-        {Gy0, 0.0, 0.0},           % Gyroscope offset, complementary filter initial angle/rate
-        {Pid_Speed, Pid_Stability, Pid_Obstacle_Avoidance}, % PID controllers
-        {0.0, 0.0},                % Initial advance and turning velocities [cm/s, deg/s]
-        {0, 0, 200.0, T0}          % Loop frequency tracking {N, freq, mean_freq, time_end}
-    ).
+    State = #{
+        robot_state => {rest, false}, %{Robot_State, Robot_Up}
+        kalman_state => {T0, X0, P0}, %{Tk, Xk, Pk}
+        move_speed => {0.0, 0.0}, % {Adv_V_Ref, Turn_V_Ref}
+        frequency => {0, 0, 200.0, T0} %{N, Freq, Mean_Freq, T_End}
+    }, 
 
+    robot_loop(State).
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Main Robot Control Loop
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+robot_loop(State) ->
 
-%% @doc Main control loop for the robot.
-%% This function handles sensor data acquisition, control logic, and communication with the ESP32.
-%% @param Start_Time - The initial timestamp for the robot.
-%% @param Hera_pid - The process ID of the Hera process for logging.
-%% @param {Robot_State, Robot_Up} - The current state of the robot and its upright status.
-%% @param {T0, X0, P0} - The current time, Kalman state, and Kalman covariance.
-%% @param I2Cbus - The I2C bus for communication with external devices.
-%% @param {Logging, Log_End, Log_List} - Logging status, end time, and log list.
-%% @param {Gy0, Angle_Complem, Angle_Rate} - Gyroscope offset and complementary filter parameters.
-%% @param {Pid_Speed, Pid_Stability, Pid_Obstacle_Avoidance} - PID controllers for speed, stability, and obstacle avoidance.
-%% @param {Adv_V_Ref, Turn_V_Ref} - Reference velocities for advance and turning.
-%% @param {N, Freq, Mean_Freq, T_End} - Loop frequency tracking variables.
-%% @return - The updated state of the robot after processing the loop.
-robot_main(Start_Time, Hera_pid, {Robot_State, Robot_Up}, {T0, X0, P0},
-    I2Cbus, {Logging, Log_End, Log_List},
-    {Gy0, Angle_Complem, Angle_Rate},
-    {Pid_Speed, Pid_Stability, Pid_Obstacle_Avoidance},
-    {Adv_V_Ref, Turn_V_Ref},
-    {N, Freq, Mean_Freq, T_End}) ->
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% PARSE STATE MAP %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%    
+    {Robot_State, Robot_Up} = maps:get(robot_state, State),
+    {Tk, Xk, Pk} = maps:get(kalman_state, State),
+    {Adv_V_Ref, Turn_V_Ref} = maps:get(move_speed, State),
+    {N, Freq, Mean_Freq, T_End} = maps:get(frequency, State), 
 
-    % Compute elapsed time since last iteration
-    T1 = erlang:system_time() / 1.0e6,
-    Dt = (T1 - T0) / 1000.0,
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% COMPUTE Dt BETWEEN ITERATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    T1 = erlang:system_time()/1.0e6,
+	Dt = (T1- Tk)/1000.0,
 
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    %% Sensor Reading
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% GET NEW PMOD_NAV MEASURE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    [Gy,Ax,Az] = pmod_nav:read(acc, [out_y_g, out_x_xl, out_z_xl], #{g_unit => dps}),
 
-    [Gy, Ax, Az] = pmod_nav:read(acc, [out_y_g, out_x_xl, out_z_xl], #{g_unit => dps}),
-    Distance_Sonar_inch = pmod_maxsonar:get(),
-    Distance_Sonar_cm = helper_module:round(Distance_Sonar_inch * ?INCH_TO_CM, 4),
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% GET INPUT FROM I2CBus %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    {Speed, CtrlByte} = i2c_read(),
+    [Arm_Ready, _, _, Get_Up, Forward, Backward, Left, Right] = hera_com:get_bits(CtrlByte),
 
-    Filtered_Distance = distance_filtering(Distance_Sonar_cm, 600.0),
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% DERIVE CONTROLS FROM INPUTS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    Adv_V_Goal = speed_ref(Forward, Backward),
+    Turn_V_Goal = turn_ref(Left, Right),
 
-    % Read data from ESP32 (wheel speeds, control flags)
-    [<<SL1, SL2, SR1, SR2, CtrlByte>>] = grisp_i2c:transfer(I2Cbus, [{read, 16#40, 1, 5}]),
-    [Speed_L, Speed_R] = hera_com:decode_half_float([<<SL1, SL2>>, <<SR1, SR2>>]), % Decode the half-float values for left and right wheel speeds
-    Speed = (Speed_L + Speed_R) / 2, % Compute the average speed of the robot
-    [Arm_Ready, Switch, Test, Get_Up, Forward, Backward, Left, Right] = hera_com:get_bits(CtrlByte),
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN COMPUTATIONS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    [Angle, {X1, P1}] = kalman_angle(Dt, Ax, Az, Gy, Xk, Pk),
 
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    %% Command Computation
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SET NEW ENGINES COMMANDS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    {Acc, Adv_V_Ref_New, Turn_V_Ref_New} = stability_engine:controller({Dt, Angle, Speed}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal, Turn_V_Ref}),
+    
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% DETERMINE NEW ROBOT STATE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    Robot_Up_New = is_robot_up(Angle, Robot_Up),
+    Next_Robot_State = get_robot_state({Robot_State, Robot_Up, Get_Up, Arm_Ready, Angle}),
+    Output_Byte = get_output_state(Next_Robot_State, Angle),    
 
-    Adv_V_Goal = helper_module:speed_ref(Forward, Backward),
-    Turn_V_Goal = helper_module:turn_ref(Left, Right),
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SEND CONTROLS TO I2CBus %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    i2c_write(Acc, Turn_V_Ref_New, Output_Byte),
 
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    %% Angle Estimation
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% FREQUENCY STABILISATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    {N_New, Freq_New, Mean_Freq_New} = frequency_computation(Dt, N, Freq, Mean_Freq),
+    smooth_frequency(T_End, T1),
 
-    % Angle from accelerometer only (for basic check)
-    Angle_Accelerometer = math:atan(Az / (-Ax)) * ?RAD_TO_DEG,
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% STATE UPDATE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    T_End_New = erlang:system_time()/1.0e6,
+    NewState = State#{
+        robot_state => {Next_Robot_State, Robot_Up_New},
+        kalman_state => {T1, X1, P1},
+        move_speed => {Adv_V_Ref_New, Turn_V_Ref_New},
+        frequency => {N_New, Freq_New, Mean_Freq_New, T_End_New}
+    },
 
-    % Kalman Filter fusion: accelerometer + gyroscope + sonar distance
-    {X1, P1} = helper_module:kalman_angle(Dt, Ax, Az, Gy, Gy0, X0, P0, Filtered_Distance),
-    [Th_Kalman, _W_Kalman, D_Kalman] = mat:to_array(X1), % Extract the angle (Th_Kalman) and distance from the state matrix.
-    Angle_Kalman = Th_Kalman * ?RAD_TO_DEG,
+    robot_loop(NewState).
 
-    io:format("[Robot] Sonar: ~p cm | Kalman Distance Estimate: ~p cm~n", [Filtered_Distance, D_Kalman]),
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% CONFIG FUNCTIONS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-    % Complementary filter fusion: gyroscope + accelerometer (fast)
-    K = 1.25 / (1.25 + (1.0 / Mean_Freq)), % Compute the weighting factor.
-    {Angle_Complem_New, Angle_Rate_New} = helper_module:complem_angle({Dt, Ax, Az, Gy, Gy0, K, Angle_Complem, Angle_Rate}),
+calibrate() ->
+    io:format("[ROBOT] Calibrating... Do not move the pmod_nav!~n"),
+    N = 500,
+    Y_List = [pmod_nav:read(acc, [out_y_g]) || _ <- lists:seq(1, N)],
+    Gy0 = lists:sum([Y || [Y] <- Y_List]) / N,
+    io:format("[ROBOT] Done calibrating~n"),
+    [grisp_led:flash(L, green, 500) || L <- [1, 2]],
+    persistent_term:put(gy0, Gy0).    
 
-    % Select angle estimator
-    Angle = helper_module:select_angle(Switch, Angle_Kalman, Angle_Complem),
+init_kalman() ->
+    % Initiating kalman constants
+    R = mat:matrix([[3.0, 0.0], [0, 3.0e-6]]),
+    Q = mat:matrix([[3.0e-5, 0.0], [0.0, 10.0]]),
+    Jh = fun (_) -> mat:matrix([  	[1, 0],
+								    [0, 1] ])
+		 end,
+    persistent_term:put(kalman_constant, {R, Q, Jh}),
 
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    %% Stability Control
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    % Initial State and Covariance matrices
+    X0 = mat:matrix([[0], [0]]),
+    P0 = mat:matrix([[0.1, 0], [0, 0.1]]),
+    {X0, P0}.
 
-    % Compute the acceleration and turning velocity references using the stability engine.
-    {Acc, Adv_V_Ref_New, Turn_V_Ref_New} =
-        stability_engine:controller(
-            {Dt, Angle, Speed},
-            {Pid_Speed, Pid_Stability, Pid_Obstacle_Avoidance},
-            {Adv_V_Goal, Adv_V_Ref},
-            {Turn_V_Goal, Turn_V_Ref},
-            {D_Kalman, exponential}
-        ),
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN COMPUTATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    %% Robot State Management
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+kalman_angle(Dt, Ax, Az, Gy, X0, P0) ->
+    Gy0 = persistent_term:get(gy0),
+    {R, Q, Jh} = persistent_term:get(kalman_constant),
+    
+    F = fun (X) -> [Th, W] = mat:to_array(X),
+				mat:matrix([ 	[Th+Dt*W],
+								[W      ] ])
+		end,
+    Jf = fun (_) -> mat:matrix([  	[1, Dt],
+								    [0, 1 ] ])
+		 end,
+    H = fun (X) -> [Th, W] = mat:to_array(X),
+				mat:matrix([ 	[Th],
+								[W ] ])
+		end,
+    
+    Z = mat:matrix([[math:atan(Az / (-Ax))], [(Gy-Gy0)*?DEG_TO_RAD]]),
+    {X1, P1} = kalman:ekf({X0, P0}, {F, Jf}, {H, Jh}, Q, R, Z),
 
-    % Determine the state of the robot (whether it is upright or not)
-    Robot_Up_New =
-        case {Robot_Up, abs(Angle)} of
-            % If the robot is upright and the absolute angle exceeds 20 degrees, it is considered to have fallen.
-            {true, A} when A > 20 -> false;
-            % If the robot is not upright and the absolute angle is less than 18 degrees, it is considered to have recovered.
-            {false, A} when A < 18 -> true;
-            _ -> Robot_Up
-        end,
+    [Th_Kalman, _W_Kalman] = mat:to_array(X1),
+    Angle = Th_Kalman * ?RAD_TO_DEG,
+    [Angle, {X1, P1}].
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% ROBOT STATE LOGIC %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-    % Determine the forward/backward direction of the robot based on the angle.
-    F_B = case Angle > 0.0 of true -> 1; false -> 0 end,
+get_robot_state(Robot_State) -> % {Robot_state, Robot_Up, Get_Up, Arm_ready, Angle}
+    case Robot_State of
+        {rest, _, true, _, _} -> raising;
+        {rest, _, _, _, _} -> rest;
+        {raising, true, _, _, _} -> stand_up;
+        {raising, _, false, _, _} -> soft_fall;
+        {raising, _, _, _, _} -> raising;
+        {stand_up, _, false, _, _} -> wait_for_extend;
+        {stand_up, false, _, _, _} -> rest;
+        {stand_up, _, _, _, _} -> stand_up;
+        {wait_for_extend, _, _, _, _} -> prepare_arms;
+        {prepare_arms, _, _, true, _} -> free_fall;
+        {prepare_arms, _, true, _, _} -> stand_up;
+        {prepare_arms, false, _, _, _} -> rest;
+        {prepare_arms, _, _, _, _} -> prepare_arms;
+        {free_fall, _, _, _, Angle} ->
+            case abs(Angle) >10 of
+                true -> wait_for_retract;
+                _ ->free_fall
+            end;
+        {wait_for_retract, _, _, _, _} -> soft_fall;
+        {soft_fall, _, _, true, _} -> rest;
+        {soft_fall, _, true, _, _} -> raising;
+        {soft_fall, _, _, _, _} -> soft_fall
+    end.
 
-    Next_Robot_State = helper_module:robot_state_transition(Robot_State, Get_Up, Robot_Up, Arm_Ready, abs(Angle)),
+get_output_state(State, Angle) ->
+    Move_direction = get_movement_direction(Angle),    
+    % Output bits = [Power, Freeze, Extend, Robot_Up_Bit, Move_direction, 0, 0, 0]
+    case State of 
+        rest -> 
+            get_byte([0, 0, 0, 0, Move_direction, 0, 0, 0]);
+        raising -> 
+            get_byte([1, 0, 1, 0, Move_direction, 0, 0, 0]);
+        stand_up -> 
+            get_byte([1, 0, 0, 1, Move_direction, 0, 0, 0]);
+        wait_for_extend -> 
+            get_byte([1, 0, 1, 1, Move_direction, 0, 0, 0]);
+        prepare_arms -> 
+            get_byte([1, 0, 1, 1, Move_direction, 0, 0, 0]);
+        free_fall -> 
+            get_byte([1, 1, 1, 1, Move_direction, 0, 0, 0]);
+        wait_for_retract -> 
+            get_byte([1, 0, 0, 0, Move_direction, 0, 0, 0]);
+        soft_fall -> 
+            get_byte([1, 0, 0, 0, Move_direction, 0, 0, 0])
+    end.
 
-    {Power, Freeze, Extend, Robot_Up_Bit} = helper_module:robot_output_state(Next_Robot_State),
+is_robot_up(Angle, Robot_Up) ->
+    if 
+        Robot_Up and (abs(Angle) > 20) ->
+            false;
+        not Robot_Up and (abs(Angle) < 18) -> 
+            true;
+        true ->
+            Robot_Up
+    end.
 
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    %% Communication to ESP32
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+get_movement_direction(Angle) ->
+    if
+        Angle > 0.0 ->
+            1;
+        true ->
+            0
+    end.
 
-    Output_Byte = helper_module:get_byte([Power, Freeze, Extend, Robot_Up_Bit, F_B, 0, 0, 0]),
+get_byte(List) ->
+    [A, B, C, D, E, F, G, H] = List,
+    A*128 + B*64 + C*32 + D*16 + E*8 + F*4 + G*2 + H. 
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% I2C COMMUNICATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+i2c_read() ->
+    %Receive I2C and conversion
+    I2Cbus = persistent_term:get(i2c),
+    [<<SL1,SL2,SR1,SR2,CtrlByte>>] = grisp_i2c:transfer(I2Cbus, [{read, 16#40, 1, 5}]),
+    [Speed_L,Speed_R] = hera_com:decode_half_float([<<SL1, SL2>>, <<SR1, SR2>>]),
+    Speed = (Speed_L + Speed_R)/2,
+    {Speed, CtrlByte}.
+
+i2c_write(Acc, Turn_V_Ref_New, Output_Byte) ->
+    I2Cbus = persistent_term:get(i2c),
     [HF1, HF2] = hera_com:encode_half_float([Acc, Turn_V_Ref_New]),
+    grisp_i2c:transfer(I2Cbus, [{write, 16#40, 1, [HF1, HF2, <<Output_Byte>>]}]).
 
-    grisp_i2c:transfer(I2Cbus, [{write, 16#40, 1, [HF1, HF2, <<Output_Byte>>]}]),
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% MISCELLANIOUS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    %% Logging & Testing Features
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-    {N_New, Freq_New, Mean_Freq_New} = helper_module:frequency_computation(Dt, N, Freq, Mean_Freq),
-
-    % Determine the end time for logging based on the test mode.
-    Log_End_New = if Test -> erlang:system_time()/1.0e6 + ?LOG_DURATION; true -> Log_End end,
-    Logging_New = (erlang:system_time()/1.0e6) < Log_End_New,
-
-    % Flickering LEDs when logging
-    helper_module:flicker_led(Logging_New, N),
-
-    % Start/Stop log messages to Hera
-    helper_module:manage_logging_transition(Hera_pid, Logging, Logging_New),
-
-    % Send values to ESP32 if requested, otherwise accumulate values in the log list
-    Log_List_New = helper_module:update_log_list(Logging_New, Log_List, 
-        [T1-Start_Time, 1/Dt, Gy, Acc, CtrlByte, -Angle_Accelerometer, -Angle_Kalman, -Angle_Complem, Adv_V_Ref, Switch, Adv_V_Ref_New, Turn_V_Ref_New, Speed]),
-    
-    % Handle potential incoming messages (get_all_data, freq, acc)
-    helper_module:handle_incoming_messages({
-        T1-Start_Time, 1/Dt, Gy, Acc, CtrlByte,
-        -Angle_Accelerometer, -Angle_Kalman, -Angle_Complem,
-        Adv_V_Ref, Switch, Adv_V_Ref_New, Turn_V_Ref_New, Speed
-    }),
-    
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    %% Loop Timing Management
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-    helper_module:enforce_loop_frequency(T_End),
-
-    T_End_New = erlang:system_time() / 1.0e6,
-
-    % Recursive call (robot continues operation)
-    robot_main(
-        Start_Time, Hera_pid,
-        {Next_Robot_State, Robot_Up_New},
-        {T1, X1, P1},
-        I2Cbus,
-        {Logging_New, Log_End_New, Log_List_New},
-        {Gy0, Angle_Complem_New, Angle_Rate_New},
-        {Pid_Speed, Pid_Stability, Pid_Obstacle_Avoidance},
-        {Adv_V_Ref_New, Turn_V_Ref_New},
-        {N_New, Freq_New, Mean_Freq_New, T_End_New}
-    ).
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Global variables related functions
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-%% @doc Updates the desired frequency goal in the ETS table.
-%% This function modifies the value associated with the key `"Freq_Goal"`
-%% in the `variables` ETS table to the provided frequency value.
-modify_frequency(Freq) ->
-    ets:insert(variables, {"Freq_Goal", Freq}),
-    ok.
-
-%% @doc Filters the distance measurement to avoid large fluctuations.
-%% This function checks the current distance against the previous distance
-%% @param Rounded_distance The current distance measurement (rounded).
-%% @param Max_Change The maximum allowable change in distance.
-%% @return The filtered distance measurement.
-distance_filtering(Rounded_distance, Max_Change) ->
-    % Retrieve the previous distance measurement from the ETS table, or default to the current distance
-    case ets:lookup(variables, "Prev_Distance") of
-        [] ->
-            % If no previous distance is stored, use the current distance
-            Prev_Distance = Rounded_distance;
-        [{_, Prev_Distance_Stored}] ->
-            Prev_Distance = Prev_Distance_Stored
+speed_ref(Forward, Backward) ->
+    if
+        Forward ->
+            Adv_V_Goal = ?ADV_V_MAX;
+        Backward ->
+            Adv_V_Goal = - ?ADV_V_MAX;
+        true ->
+            Adv_V_Goal = 0.0
     end,
+    Adv_V_Goal.
 
-    % Compute the absolute change in distance
-    Distance_Change = abs(Rounded_distance - Prev_Distance),
+turn_ref(Left, Right) ->
+    if
+        Right ->
+            Turn_V_Goal = ?TURN_V_MAX;
+        Left ->
+            Turn_V_Goal = - ?TURN_V_MAX;
+        true ->
+            Turn_V_Goal = 0.0
+    end,
+    Turn_V_Goal.
 
-    % Check if the change exceeds the maximum allowable threshold
-    Filtered_Distance =
-        if
-            Distance_Change > Max_Change ->
-                % If the change is too large, use the previous distance
-                Prev_Distance;
-            true ->
-                % Otherwise, use the current distance
-                Rounded_distance
-        end,
-
-    % Store the filtered distance as the new previous distance in the ETS table
-    ets:insert(variables, {"Prev_Distance", Filtered_Distance}),
-    Filtered_Distance.
-
+frequency_computation(Dt, N, Freq, Mean_Freq) ->
+    if 
+        N == 100 ->
+            N_New = 0,
+            Freq_New = 0,
+            Mean_Freq_New = Freq;
+        true ->
+            N_New = N+1,
+            Freq_New = ((Freq*N)+(1/Dt))/(N+1),
+            Mean_Freq_New = Mean_Freq
+    end,
+    {N_New, Freq_New, Mean_Freq_New}.
+    
+smooth_frequency(T_End, T1)->
+    T2 = erlang:system_time()/1.0e6,
+    Freq_Goal = persistent_term:get(freq_goal),
+    Delay_Goal = 1.0/Freq_Goal * 1000.0,
+    if
+        T2-T_End < Delay_Goal ->
+            timer:sleep(Delay_Goal-(T2-T1));
+        true ->
+            ok
+    end.
