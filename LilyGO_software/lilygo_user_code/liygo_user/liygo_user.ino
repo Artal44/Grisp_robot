@@ -6,8 +6,8 @@
 #define Pin 15
 #define Buzz 13
 
-#define LORA_PERIOD 868  
-#define BAND 868E6
+#define LORA_PERIOD 433
+#define BAND 433E6
 
 
 #define CONFIG_MOSI 27
@@ -59,7 +59,7 @@ void loop(){
 
 void LoRA_sender(){ 
 
-  state = digitalRead(Pin);
+  state = LOW;
 
   if(state==HIGH){
     cmd = cmd & 127;

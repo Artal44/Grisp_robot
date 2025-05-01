@@ -7,6 +7,7 @@ class Sensor :
         self.room = -1
         self.x = -1
         self.y = -1
+<<<<<<< HEAD
         self.height = 0
         self.angle = 0
         self.distance = -1
@@ -30,10 +31,15 @@ class Sensor :
             case "BL":
                 self.angle = 315
     
+=======
+        self.distance = -1
+
+>>>>>>> f3714778708663b2b55f36751eadfffe716383e6
     def update_pos(self, room, x, y):
         self.room = room
         self.x = x
         self.y = y 
+<<<<<<< HEAD
         print("[SENSOR_" + str(self.id) + "] is at (" + str(self.x) + ", " + str(self.y) + ") in room number " + str(self.room) + " with an angle of " + str(self.angle))
 
     def update_data(self, distance):
@@ -42,3 +48,9 @@ class Sensor :
     def update_height(self, height):
         print("[SENSOR_" + str(self.id) + "] is at " + str(height) +"m from the ground")
         self.height = height
+=======
+        print("[SENSOR_" + str(self.id) + "] is at (" + str(self.x) + ", " + str(self.y) + ") in room number " + str(self.room))
+
+    def update_data(self, distance):
+        self.distance = distance
+>>>>>>> f3714778708663b2b55f36751eadfffe716383e6

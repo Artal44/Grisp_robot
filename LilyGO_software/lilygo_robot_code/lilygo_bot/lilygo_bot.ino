@@ -5,7 +5,7 @@
 
 #include "motor_engine.h"
 
-#define BAND 868E6
+#define BAND 433E6
 #define CONFIG_MOSI 27
 #define CONFIG_MISO 19
 #define CONFIG_CLK  5
