@@ -26,7 +26,7 @@ robot_init() ->
 
     %PIDs initialisation
     Pid_Speed = spawn(pid_controller, pid_init, [-0.12, -0.07, 0.0, -1, 60.0, 0.0]),
-    Pid_Stability = spawn(pid_controller, pid_init, [17.0, 0.0, 4.0, -1, -1, 0.0]),
+    Pid_Stability = spawn(pid_controller, pid_init, [16, 0.0, 5.8, -1, -1, 0.0]), % 20.4 pour Kp et 5.8
     persistent_term:put(controllers, {Pid_Speed, Pid_Stability}),
     persistent_term:put(freq_goal, 300.0),
 
@@ -44,6 +44,9 @@ robot_init() ->
     robot_loop(State).
 
 robot_loop(State) ->
+
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% GRiSP LED FLASH %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    [grisp_led:color(L, blue) || L <- [1, 2]],
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% PARSE STATE MAP %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%    
     {Robot_State, Robot_Up} = maps:get(robot_state, State),
@@ -203,9 +206,9 @@ get_output_state(State, Angle) ->
 
 is_robot_up(Angle, Robot_Up) ->
     if 
-        Robot_Up and (abs(Angle) > 20) ->
+        Robot_Up and (abs(Angle) > 40) ->
             false;
-        not Robot_Up and (abs(Angle) < 18) -> 
+        not Robot_Up and (abs(Angle) < 38) -> 
             true;
         true ->
             Robot_Up
