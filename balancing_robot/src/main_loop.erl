@@ -43,6 +43,7 @@ robot_init() ->
         kalman_state => {T0, X0, P0}, %{Tk, Xk, Pk}
         move_speed => {0.0, 0.0}, % {Adv_V_Ref, Turn_V_Ref}
         frequency => {0, 0, 200.0, T0} %{N, Freq, Mean_Freq, T_End}
+	acc_prev => 0.0
     }, 
 
     robot_loop(State).
@@ -57,7 +58,7 @@ robot_loop(State) ->
     {Tk, Xk, Pk} = maps:get(kalman_state, State),
     {Adv_V_Ref, Turn_V_Ref} = maps:get(move_speed, State),
     {N, Freq, Mean_Freq, T_End} = maps:get(frequency, State), 
-
+    Acc_Prev = maps:get(acc_prev, State),
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% COMPUTE Dt BETWEEN ITERATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     T1 = erlang:system_time()/1.0e6,
 	Dt = (T1- Tk)/1000.0,
@@ -74,7 +75,7 @@ robot_loop(State) ->
     Turn_V_Goal = turn_ref(Left, Right),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN COMPUTATIONS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    [Angle, {X1, P1}] = kalman_angle(Dt, Ax, Az, Gy, Acc, Xk, Pk),
+    [Angle, {X1, P1}] = kalman_angle(Dt, Ax, Az, Gy, Acc_Prev, Xk, Pk),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SET NEW ENGINES COMMANDS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {Acc, Adv_V_Ref_New, Turn_V_Ref_New} = stability_engine:controller({Dt, Angle, Speed}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal, Turn_V_Ref}),
@@ -97,7 +98,8 @@ robot_loop(State) ->
         robot_state => {Next_Robot_State, Robot_Up_New},
         kalman_state => {T1, X1, P1},
         move_speed => {Adv_V_Ref_New, Turn_V_Ref_New},
-        frequency => {N_New, Freq_New, Mean_Freq_New, T_End_New}
+        frequency => {N_New, Freq_New, Mean_Freq_New, T_End_New},
+        acc_prev => Acc
     },
 
     robot_loop(NewState).
