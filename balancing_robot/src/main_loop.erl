@@ -26,7 +26,7 @@ robot_init() ->
 
     %PIDs initialisation
     Pid_Speed = spawn(pid_controller, pid_init, [-0.12, -0.07, 0.0, -1, 60.0, 0.0]),
-    Pid_Stability = spawn(pid_controller, pid_init, [16, 0.0, 5.8, -1, -1, 0.0]), % 20.4 pour Kp et 5.8
+    Pid_Stability = spawn(pid_controller, pid_init, [20.0, 0.0, 5.8, -1, -1, 0.0]), % 20.4 pour Kp et 5.8
     persistent_term:put(controllers, {Pid_Speed, Pid_Stability}),
     persistent_term:put(freq_goal, 300.0),
 
@@ -172,7 +172,7 @@ get_robot_state(Robot_State) -> % {Robot_state, Robot_Up, Get_Up, Arm_ready, Ang
         {prepare_arms, false, _, _, _} -> rest;
         {prepare_arms, _, _, _, _} -> prepare_arms;
         {free_fall, _, _, _, Angle} ->
-            case abs(Angle) >10 of
+            case abs(Angle) > 10 of
                 true -> wait_for_retract;
                 _ ->free_fall
             end;
