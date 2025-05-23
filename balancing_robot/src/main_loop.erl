@@ -19,6 +19,8 @@
 robot_init() ->
 
     process_flag(priority, max),
+    {ok, LogFile} = file:open("angle_log.txt", [write]),
+    persistent_term:put(angle_log, LogFile),
 
     calibrate(),
 
@@ -76,6 +78,7 @@ robot_loop(State) ->
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN COMPUTATIONS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     [Angle, {X1, P1}] = kalman_angle(Dt, Ax, Az, Gy, Acc_Prev, Xk, Pk),
+    file:write(persistent_term:get(angle_log), io_lib:format("~.3f~n", [Angle])),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SET NEW ENGINES COMMANDS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {Acc, Adv_V_Ref_New, Turn_V_Ref_New} = stability_engine:controller({Dt, Angle, Speed}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal, Turn_V_Ref}),
