@@ -2,14 +2,22 @@ import socket
 import threading
 from Sensor import Sensor
 from Robot import Robot
+from Sonar import Sonar
 import time
 
 class Server:
-
-    HOST = '172.20.10.8'
-    PORT = 5000
+    # Automatically get the local IP address
+    # Get the local IP address by connecting to a public address (does not send data)
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            s.connect(('8.8.8.8', 80))
+            HOST = s.getsockname()[0]
+        except Exception:
+            HOST = '127.0.0.1'
+    PORT = 5000  # Use the same port on both the server and the GRiSP device
     buffer = []
     sensors = {}
+    robot_sonar = {}
     robot = Robot()
     started = False
 
@@ -34,11 +42,15 @@ class Server:
                 data, addr = server_socket.recvfrom(1024)
                 try :
                     data = data.decode()
-
                     if data[:5] == "Hello":
-                        id = int(data[11:])
-                        self.sensors[id] = Sensor(addr[0], addr[1], id)
-                        print("[SERVER] Received hello from " + str(id) + " on (" + str(addr[0]) + ", " + str(addr[1]) + ")")
+                        if data[11:17] == "ROBOT_":
+                            role = data[17:]
+                            self.robot_sonar[role] = Sonar(addr[0], addr[1], role)
+                            print("[SERVER] Received hello from ROBOT_" + role)
+                        else :
+                            id = int(data[11:])
+                            self.sensors[id] = Sensor(addr[0], addr[1], id)
+                            print("[SERVER] Received hello from " + str(id) + " on (" + str(addr[0]) + ", " + str(addr[1]) + ")")
                         self.send("Ack , server", "uni", id)
                     elif data[:8] == "Distance":
                         self.sensors[addr[0]].update_data(float(data[9:]))

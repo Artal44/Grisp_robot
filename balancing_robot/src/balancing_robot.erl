@@ -12,57 +12,78 @@
 start(_Type, _Args) ->
     {ok, Supervisor} = balancing_robot_sup:start_link(),
     [grisp_led:flash(L, yellow, 500) || L <- [1, 2]],
-	_ = grisp:add_device(spi2, pmod_nav),
-    pmod_nav:config(acc, #{odr_g => {hz,238}}),
-
-    _ = grisp:add_device(uart, pmod_maxsonar),
+    io:format("[BALANCING_ROBOT] Starting GRiSP application~n", []),
     numerl:init(),
-    timer:sleep(2000),
+
     {ok, Id} = get_grisp_id(),
     if 
         Id == 0->
-            io:format("[ROBOT] GRiSP ID : ~p~n", [Id]),
+            io:format("[ROBOT_MAIN] GRiSP ID : ~p~n", [Id]),
+            persistent_term:put(name, list_to_atom("ROBOT_MAIN")),
+            add_device(spi2, pmod_nav),
+            pmod_nav:config(acc, #{odr_g => {hz,238}}),
+            add_device(uart, pmod_maxsonar),
+            timer:sleep(2000),
             spawn(main_loop, robot_init, []);
-        Id == 1;
+        Id == 1 ->
+            io:format("[ROBOT_SONAR_LEFT] GRiSP ID : ~p~n", [Id]),
+            persistent_term:put(name, list_to_atom("ROBOT_SONAR_LEFT")),
+            add_device(uart, pmod_maxsonar),
+            timer:sleep(2000);
+            % spawn(sonar_detection, sonar_init, [Id]);
         Id == 2 ->
-            io:format("[SONAR] GRiSP ID : ~p~n", [Id])
+            io:format("[ROBOT_SONAR_RIGHT] GRiSP ID : ~p~n", [Id]),
+            persistent_term:put(name, list_to_atom("ROBOT_SONAR_RIGHT")),
+            add_device(uart, pmod_maxsonar),
+            timer:sleep(2000)
             % spawn(sonar_detection, sonar_init, [Id])
     end,
     
-    hera_subscribe:subscribe(self()),
+    hera_subb:subscribe(self()),
     config(),
-    loop(),
     {ok, Supervisor}.
 
 stop(_State) -> ok.
+
+add_device(Port, Name) ->
+    case grisp:add_device(Port, Name) of
+        {device, _, _, _, _} = DeviceInfo ->
+            io:format("[~p] Device ~p added (info: ~p)~n", [persistent_term:get(name), Name, DeviceInfo]);
+        {error, Reason} ->
+            io:format("[~p] Device ~p not added: ~p~n", [persistent_term:get(name), Name, Reason]),
+            timer:sleep(2000),
+            add_device(Port, Name);
+        Other ->
+            io:format("[~p] Unexpected return from grisp:add_device(~p, ~p): ~p~n", [persistent_term:get(name), Port, Name, Other]),
+            timer:sleep(2000),
+            add_device(Port, Name)
+    end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% NETWORK CONFIGURATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-
 config() ->
-    persistent_term:put(name, list_to_atom("robot")),
     await_connection(),
-    io:format("[ROBOT] Waiting for start signal ...~n~n").
+    io:format("[~p] Waiting for start signal ...~n~n", [persistent_term:get(name)]).
 
 await_connection() ->
     % Waiting for HERA to notify succesful connection
-    io:format("[ROBOT] WiFi setup starting...~n"),
+    io:format("[~p] WiFi setup starting...~n", [persistent_term:get(name)]),
     receive        
         {hera_notify, "connected"} -> % Received when hera_com managed to connect to the network
-            io:format("[ROBOT] WiFi setup done~n~n"),
+            io:format("[~p] WiFi setup done~n~n", [persistent_term:get(name)]),
             grisp_led:flash(2, white, 1000),
             discover_server()
     after 18000 ->
-        io:format("[ROBOT] WiFi setup failed:~n~n"),
+        io:format("[~p] WiFi setup failed:~n~n", [persistent_term:get(name)]),
         grisp_led:flash(2, red, 750),
         await_connection()
     end.
 
 discover_server() ->
     % Waits forever until the server sends a Ping
-    io:format("[ROBOT] Waiting for ping from server~n"),
+    io:format("[~p] Waiting for ping from server~n", [persistent_term:get(name)]),
     receive
         {hera_notify, ["ping", Name, SIp, Port]} -> % Received upon server ping reception
             {ok, Ip} = inet:parse_address(SIp),
@@ -70,17 +91,18 @@ discover_server() ->
             hera_com:add_device(list_to_atom(Name), Ip, IntPort),
             ack_loop()
     after 9000 ->
-        io:format("[ROBOT] no ping from server~n"),
+        io:format("[~p] no ping from server~n", [persistent_term:get(name)]),
         discover_server()
     end.
 
 ack_loop() ->
     % Tries to pair with the server by a Hello -> Ack
     % @param Id : Sensor's Id set by the jumpers (Integer)
-    send_udp_message(server, "Hello from robot", "UTF8"),
+    Payload = io_lib:format("Hello from ~p", [persistent_term:get(name)]),
+    send_udp_message(server, Payload, "UTF8"),
     receive
         {hera_notify, ["Ack", _]} -> % Ensures the discovery of the sensor by the server
-            io:format("[ROBOT] Received ACK from server~n"),
+            io:format("[~p] Received ACK from server~n", [persistent_term:get(name)]),
             [grisp_led:flash(L, green, 1000) || L <- [1, 2]],
             ok
     after 5000 ->
@@ -93,78 +115,6 @@ send_udp_message(Name, Message, Type) ->
     % @param Message : message to be sent (String/Tuple)
     % @param Type : type of message, can be UTF8 or Binary (String)
     hera_com:send_unicast(Name, Message, Type).
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% LOOP %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-loop() ->
-    receive 
-        {hera_notify, ["Add_Device", Name, SIp, Port]} ->  % Received at config time to register all used sensors 
-            add_device(Name, SIp, Port);          
-        {hera_notify, ["Exit"]} ->
-            reset_state();
-        {hera_notify, ["ping", _, _, _]} -> % Ignore the pings after server discovery
-            loop();
-        {hera_notify, Msg} -> % Unhandled Message
-            io:format("[SENSOR] Received unhandled message : ~p~n", [Msg]),
-            loop();
-        Msg -> % Message not from hera_notify
-            io:format("[SENSOR] receive strange message : ~p~n",[Msg]),
-            loop()
-    end.
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% LOOP FUNCTIONS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-add_device(Name, SIp, SPort) ->
-    % Adds a device to the list of known devices
-    % @param Name : name of the device to register (String)
-    % @param SIp : IP adress (String)
-    % @param SPort : Port (String)
-    case list_to_atom(Name) of 
-        robot -> % Don't register self
-            ok;
-        OName -> 
-            io:format("[SENSOR] Discovered new device : ~p~n", [Name]),
-            {ok, Ip} = inet:parse_address(SIp),
-            Port = list_to_integer(SPort),
-            hera_com:add_device(OName, Ip, Port)
-    end,            
-    loop().
-
-reset_state() ->
-    % Kills all hera_measures modules, resets all data and jump back to server discovery
-    % @param Id : Sensor's Id set by the jumpers (Integer)
-    %exit_measure_module(sonar_sensor),
-    exit_measure_module(kalman_measure),
-
-    timer:sleep(500),
-    reset_data(),
-
-    grisp_led:flash(2, white, 1000),      
-    grisp_led:flash(1, green, 1000),      
-
-    discover_server(),            
-    io:format("[SENSOR] Waiting for start signal ...~n~n"),
-    loop().
-
-reset_data() ->
-    % Delete all config dependent and hera_measures data
-    hera_data:reset(),
-    io:format("[SENSOR] Data resetted~n~n").
-
-exit_measure_module(Name) ->
-    % Kills a module stored in persistent term
-    % @param Name : the name of the module (atom)
-    Pid = persistent_term:get(Name, none),    
-    case Pid of
-        none ->
-            ok;
-        _ -> 
-            exit(Pid, shutdown)
-    end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% GRISP ID %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
