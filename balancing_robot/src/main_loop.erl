@@ -19,8 +19,8 @@
 robot_init() ->
 
     process_flag(priority, max),
-    {ok, LogFile} = file:open("angle_log.txt", [write]),
-    persistent_term:put(angle_log, LogFile),
+    % {ok, LogFile} = file:open("angle_log.txt", [write]),
+    % persistent_term:put(angle_log, LogFile),
 
     calibrate(),
 
@@ -32,7 +32,7 @@ robot_init() ->
 
     %PIDs initialisation
     Pid_Speed = spawn(pid_controller, pid_init, [-0.12, -0.07, 0.0, -1, 60.0, 0.0]),
-    Pid_Stability = spawn(pid_controller, pid_init, [16, 0.0, 5.8, -1, -1, 0.0]), % 20.4 pour Kp et 5.8
+    Pid_Stability = spawn(pid_controller, pid_init, [20, 0.0, 5.8, -1, -1, 0.0]), % 20.4 pour Kp et 5.8
     persistent_term:put(controllers, {Pid_Speed, Pid_Stability}),
     persistent_term:put(freq_goal, 300.0),
 
@@ -44,8 +44,8 @@ robot_init() ->
         robot_state => {rest, false}, %{Robot_State, Robot_Up}
         kalman_state => {T0, X0, P0}, %{Tk, Xk, Pk}
         move_speed => {0.0, 0.0}, % {Adv_V_Ref, Turn_V_Ref}
-        frequency => {0, 0, 200.0, T0} %{N, Freq, Mean_Freq, T_End}
-	acc_prev => 0.0
+        frequency => {0, 0, 200.0, T0}, %{N, Freq, Mean_Freq, T_End}
+	    acc_prev => 0.0
     }, 
 
     robot_loop(State).
@@ -61,6 +61,10 @@ robot_loop(State) ->
     {Adv_V_Ref, Turn_V_Ref} = maps:get(move_speed, State),
     {N, Freq, Mean_Freq, T_End} = maps:get(frequency, State), 
     Acc_Prev = maps:get(acc_prev, State),
+
+    io:format("[ROBOT] Loop frequency : ~.3f~n", [float(Freq)]),
+    io:format("[ROBOT] Loop acceleration : ~.3f~n", [float(Acc_Prev)]),
+
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% COMPUTE Dt BETWEEN ITERATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     T1 = erlang:system_time()/1.0e6,
 	Dt = (T1- Tk)/1000.0,
@@ -78,7 +82,8 @@ robot_loop(State) ->
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN COMPUTATIONS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     [Angle, {X1, P1}] = kalman_angle(Dt, Ax, Az, Gy, Acc_Prev, Xk, Pk),
-    file:write(persistent_term:get(angle_log), io_lib:format("~.3f~n", [Angle])),
+    io:format("[ROBOT] Angle : ~.3f~n", [Angle]),
+    % file:write(persistent_term:get(angle_log), io_lib:format("~.3f~n", [Angle])),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SET NEW ENGINES COMMANDS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {Acc, Adv_V_Ref_New, Turn_V_Ref_New} = stability_engine:controller({Dt, Angle, Speed}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal, Turn_V_Ref}),
@@ -148,18 +153,23 @@ kalman_angle(Dt, Ax, Az, Gy, U, X0, P0) ->
 
     % Modèle d’état non-linéaire (digital twin)
     F = fun (X) ->
-        [Th, W] = mat:to_array(X),
-        Th1 = Th + W * Dt,
-        W1 = W + ((G / Hh) * math:sin(Th) - (U / Hh) * math:cos(Th)) * Dt,
-        mat:matrix([[Th1], [W1]])
+        Arr = mat:to_array(X),
+        case Arr of
+            [Th, W] ->
+                Th1 = Th + W * Dt,
+                W1 = W + ((G / Hh) * math:sin(Th) - (U / Hh) * math:cos(Th)) * Dt,
+                mat:matrix([[Th1], [W1]]);
+            _ ->
+                error({unexpected_state_vector, Arr})
+        end
     end,
 
     % Jacobienne de F
     Jf = fun (X) ->
         [Th, _W] = mat:to_array(X),
-        dW_dTh = ((G / Hh) * math:cos(Th) + (U / Hh) * math:sin(Th)) * Dt,
+        DW_dTh = ((G / Hh) * math:cos(Th) + (U / Hh) * math:sin(Th)) * Dt,
         mat:matrix([[1, Dt],
-                    [dW_dTh, 1]])
+                    [DW_dTh, 1]])
     end,
 
     % Observation
