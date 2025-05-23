@@ -7,6 +7,10 @@
 
 -define(ADV_V_MAX, 30.0).
 -define(TURN_V_MAX, 80.0).
+-define(g, 9.81).
+-define(M, 3.4).
+-define(h, 0.26).
+-define(I, 0.26).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% INITIALISATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -26,7 +30,7 @@ robot_init() ->
 
     %PIDs initialisation
     Pid_Speed = spawn(pid_controller, pid_init, [-0.12, -0.07, 0.0, -1, 60.0, 0.0]),
-    Pid_Stability = spawn(pid_controller, pid_init, [20.0, 0.0, 5.8, -1, -1, 0.0]), % 20.4 pour Kp et 5.8
+    Pid_Stability = spawn(pid_controller, pid_init, [16, 0.0, 5.8, -1, -1, 0.0]), % 20.4 pour Kp et 5.8
     persistent_term:put(controllers, {Pid_Speed, Pid_Stability}),
     persistent_term:put(freq_goal, 300.0),
 
@@ -70,7 +74,7 @@ robot_loop(State) ->
     Turn_V_Goal = turn_ref(Left, Right),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN COMPUTATIONS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    [Angle, {X1, P1}] = kalman_angle(Dt, Ax, Az, Gy, Xk, Pk),
+    [Angle, {X1, P1}] = kalman_angle(Dt, Ax, Az, Gy, Acc, Xk, Pk),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SET NEW ENGINES COMMANDS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {Acc, Adv_V_Ref_New, Turn_V_Ref_New} = stability_engine:controller({Dt, Angle, Speed}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal, Turn_V_Ref}),
@@ -129,28 +133,43 @@ init_kalman() ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN COMPUTATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-kalman_angle(Dt, Ax, Az, Gy, X0, P0) ->
+kalman_angle(Dt, Ax, Az, Gy, U, X0, P0) ->
     Gy0 = persistent_term:get(gy0),
     {R, Q, Jh} = persistent_term:get(kalman_constant),
-    
-    F = fun (X) -> [Th, W] = mat:to_array(X),
-				mat:matrix([ 	[Th+Dt*W],
-								[W      ] ])
-		end,
-    Jf = fun (_) -> mat:matrix([  	[1, Dt],
-								    [0, 1 ] ])
-		 end,
-    H = fun (X) -> [Th, W] = mat:to_array(X),
-				mat:matrix([ 	[Th],
-								[W ] ])
-		end,
-    
-    Z = mat:matrix([[math:atan(Az / (-Ax))], [(Gy-Gy0)*?DEG_TO_RAD]]),
+
+    % Constantes
+    G = ?g,
+    Hh = ?h + (?I / (?M * ?h)),
+
+    % Modèle d’état non-linéaire (digital twin)
+    F = fun (X) ->
+        [Th, W] = mat:to_array(X),
+        Th1 = Th + W * Dt,
+        W1 = W + ((G / Hh) * math:sin(Th) - (U / Hh) * math:cos(Th)) * Dt,
+        mat:matrix([[Th1], [W1]])
+    end,
+
+    % Jacobienne de F
+    Jf = fun (X) ->
+        [Th, _W] = mat:to_array(X),
+        dW_dTh = ((G / Hh) * math:cos(Th) + (U / Hh) * math:sin(Th)) * Dt,
+        mat:matrix([[1, Dt],
+                    [dW_dTh, 1]])
+    end,
+
+    % Observation
+    H = fun (X) ->
+        [Th, W] = mat:to_array(X),
+        mat:matrix([[Th], [W]])
+    end,
+
+    Z = mat:matrix([[math:atan(Az / (-Ax))], [(Gy - Gy0) * ?DEG_TO_RAD]]),
     {X1, P1} = kalman:ekf({X0, P0}, {F, Jf}, {H, Jh}, Q, R, Z),
 
     [Th_Kalman, _W_Kalman] = mat:to_array(X1),
     Angle = Th_Kalman * ?RAD_TO_DEG,
     [Angle, {X1, P1}].
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% ROBOT STATE LOGIC %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -172,7 +191,7 @@ get_robot_state(Robot_State) -> % {Robot_state, Robot_Up, Get_Up, Arm_ready, Ang
         {prepare_arms, false, _, _, _} -> rest;
         {prepare_arms, _, _, _, _} -> prepare_arms;
         {free_fall, _, _, _, Angle} ->
-            case abs(Angle) > 10 of
+            case abs(Angle) >10 of
                 true -> wait_for_retract;
                 _ ->free_fall
             end;
