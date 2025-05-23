@@ -64,7 +64,8 @@ robot_loop(State) ->
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% COMPUTE Dt BETWEEN ITERATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     T1 = erlang:system_time()/1.0e6,
 	Dt = (T1- Tk)/1000.0,
-
+    compute_direct_angle(Ax, Az) -> math:atan2(Az, -Ax) * ?RAD_TO_DEG.
+ 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% GET NEW PMOD_NAV MEASURE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     [Gy,Ax,Az] = pmod_nav:read(acc, [out_y_g, out_x_xl, out_z_xl], #{g_unit => dps}),
 
@@ -78,7 +79,10 @@ robot_loop(State) ->
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN COMPUTATIONS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     [Angle, {X1, P1}] = kalman_angle(Dt, Ax, Az, Gy, Acc_Prev, Xk, Pk),
-    file:write(persistent_term:get(angle_log), io_lib:format("~.3f~n", [Angle])),
+    Angle_Meas = compute_direct_angle(Ax, Az),
+
+    file:write(persistent_term:get(angle_log),
+    io_lib:format("Kalman=~.2f, Measured=~.2f~n", [Angle, Angle_Meas])),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SET NEW ENGINES COMMANDS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {Acc, Adv_V_Ref_New, Turn_V_Ref_New} = stability_engine:controller({Dt, Angle, Speed}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal, Turn_V_Ref}),
@@ -122,8 +126,9 @@ calibrate() ->
 
 init_kalman() ->
     % Initiating kalman constants
-    R = mat:matrix([[3.0, 0.0], [0, 3.0e-6]]),
-    Q = mat:matrix([[3.0e-5, 0.0], [0.0, 10.0]]),
+    R = mat:matrix([[0.02, 0.0], [0, 0.0001]]),
+    Q = mat:matrix([[0.00005, 0.0], [0.0, 0.8]])
+
     Jh = fun (_) -> mat:matrix([  	[1, 0],
 								    [0, 1] ])
 		 end,
