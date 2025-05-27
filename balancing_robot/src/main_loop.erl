@@ -19,8 +19,6 @@
 robot_init() ->
 
     process_flag(priority, max),
-    % {ok, LogFile} = file:open("angle_log.txt", [write]),
-    % persistent_term:put(angle_log, LogFile),
 
     calibrate(),
 
@@ -60,15 +58,12 @@ robot_loop(State) ->
     {Tk, Xk, Pk} = maps:get(kalman_state, State),
     {Adv_V_Ref, Turn_V_Ref} = maps:get(move_speed, State),
     {N, Freq, Mean_Freq, T_End} = maps:get(frequency, State), 
-    Acc_Prev = maps:get(acc_prev, State),
-
-    io:format("[ROBOT] Loop frequency : ~.3f~n", [float(Freq)]),
-    io:format("[ROBOT] Loop acceleration : ~.3f~n", [float(Acc_Prev)]),
+    % Acc_Prev = maps:get(acc_prev, State),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% COMPUTE Dt BETWEEN ITERATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     T1 = erlang:system_time()/1.0e6,
 	Dt = (T1- Tk)/1000.0,
-
+ 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% GET NEW PMOD_NAV MEASURE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     [Gy,Ax,Az] = pmod_nav:read(acc, [out_y_g, out_x_xl, out_z_xl], #{g_unit => dps}),
 
@@ -81,9 +76,10 @@ robot_loop(State) ->
     Turn_V_Goal = turn_ref(Left, Right),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN COMPUTATIONS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    [Angle, {X1, P1}] = kalman_angle(Dt, Ax, Az, Gy, Acc_Prev, Xk, Pk),
-    io:format("[ROBOT] Angle : ~.3f~n", [Angle]),
-    % file:write(persistent_term:get(angle_log), io_lib:format("~.3f~n", [Angle])),
+    [Angle, {X1, P1}] = kalman_angle(Dt, Ax, Az, Gy, Speed, Xk, Pk),
+    Direct_angle = math:atan(Az / (-Ax)) * ?RAD_TO_DEG,
+
+    io:format("[ROBOT] Kalman=~.2f, Measured=~.2f~n", [Angle, Direct_angle]),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SET NEW ENGINES COMMANDS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {Acc, Adv_V_Ref_New, Turn_V_Ref_New} = stability_engine:controller({Dt, Angle, Speed}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal, Turn_V_Ref}),
@@ -127,8 +123,11 @@ calibrate() ->
 
 init_kalman() ->
     % Initiating kalman constants
-    R = mat:matrix([[3.0, 0.0], [0, 3.0e-6]]),
-    Q = mat:matrix([[3.0e-5, 0.0], [0.0, 10.0]]),
+    R = mat:matrix([[3.0, 0.0], [0, 3.0e-6]]), 
+    Q = mat:matrix([[0.0002, 0.0], [0.0, 1.5]]),
+
+    % Q = mat:matrix([[3.0e-5, 0.0], [0.0, 10.0]]),
+
     Jh = fun (_) -> mat:matrix([  	[1, 0],
 								    [0, 1] ])
 		 end,
@@ -183,6 +182,7 @@ kalman_angle(Dt, Ax, Az, Gy, U, X0, P0) ->
 
     [Th_Kalman, _W_Kalman] = mat:to_array(X1),
     Angle = Th_Kalman * ?RAD_TO_DEG,
+    % io:format("Angle: ~p, Dt: ~p, Gy: ~p, Ax: ~p, Az: ~p, U: ~p, Th_Kalman: ~p, W_Kalman: ~p~n", [Angle, Dt, Gy, Ax, Az, U, Th_Kalman, _W_Kalman]),
     [Angle, {X1, P1}].
 
 
