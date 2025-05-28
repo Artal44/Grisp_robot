@@ -82,7 +82,7 @@ robot_loop(State) ->
             Next_sonar
     end,
     % Retrieve the sonar distance
-    [{_, _, _, [_Distance]}] = hera_data:get(distance, Sonar_To_Read),
+    [{_, _, _, [Distance]}] = hera_data:get(distance, Sonar_To_Read),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% DERIVE CONTROLS FROM INPUTS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     Adv_V_Goal = speed_ref(Forward, Backward),
@@ -90,6 +90,7 @@ robot_loop(State) ->
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN COMPUTATIONS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     [Angle, {X1, P1}] = kalman_angle(Dt, Ax, Az, Gy, Xk, Pk),
+    io:format("Angle value for OLD Kalman=~.2f~n", [Angle]),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SET NEW ENGINES COMMANDS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {Acc, Adv_V_Ref_New, Turn_V_Ref_New} = stability_engine:controller({Dt, Angle, Speed}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal, Turn_V_Ref}),
@@ -258,12 +259,14 @@ i2c_read() ->
             [Speed_L,Speed_R] = hera_com:decode_half_float([<<SL1, SL2>>, <<SR1, SR2>>]),
             Speed = (Speed_L + Speed_R)/2,
             {Speed, CtrlByte};
-        {error, _Reason} ->
+        {error, Reason} ->
+            io:format("[ROBOT][I2C ERROR] Error response: ~p~n", [{error, Reason}]),
             timer:sleep(5000),
             i2c_read();
         Other ->
-            io:format("[I2C ERROR] Unexpected response: ~p~n", [Other]),
-            {0.0, 0}
+            io:format("[ROBOT][I2C ERROR] Unexpected response: ~p~n", [Other]),
+            timer:sleep(5000),
+            i2c_read()
     end.
 
 i2c_write(Acc, Turn_V_Ref_New, Output_Byte) ->
