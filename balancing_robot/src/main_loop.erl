@@ -38,21 +38,19 @@ robot_init() ->
         robot_state => {rest, false}, %{Robot_State, Robot_Up}
         kalman_state => {T0, X0, P0}, %{Tk, Xk, Pk}
         move_speed => {0.0, 0.0}, % {Adv_V_Ref, Turn_V_Ref}
-        frequency => {0, 0, 200.0, T0} %{N, Freq, Mean_Freq, T_End}
+        frequency => {0, 0, 200.0, T0}, %{N, Freq, Mean_Freq, T_End}
+        next_sonar => robot_front_left % Next sonar to read
     }, 
 
     robot_loop(State).
 
 robot_loop(State) ->
-
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% GRiSP LED FLASH %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    [grisp_led:color(L, blue) || L <- [1, 2]],
-
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% PARSE STATE MAP %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%    
     {Robot_State, Robot_Up} = maps:get(robot_state, State),
     {Tk, Xk, Pk} = maps:get(kalman_state, State),
     {Adv_V_Ref, Turn_V_Ref} = maps:get(move_speed, State),
     {N, Freq, Mean_Freq, T_End} = maps:get(frequency, State), 
+    Next_sonar = maps:get(next_sonar, State),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% COMPUTE Dt BETWEEN ITERATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     T1 = erlang:system_time()/1.0e6,
@@ -64,6 +62,27 @@ robot_loop(State) ->
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% GET INPUT FROM I2CBus %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {Speed, CtrlByte} = i2c_read(),
     [Arm_Ready, _, _, Get_Up, Forward, Backward, Left, Right] = hera_com:get_bits(CtrlByte),
+
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% GET SONAR MEASUREMENTS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    % Determine which sonar to read based on forward/backward flags and current sonar
+    Sonar_To_Read = case {Forward, Backward} of
+        {true, false} -> Next_sonar;
+        {false, true} -> robot_main;
+        _ -> Next_sonar
+    end,
+    hera_com:send_unicast(Sonar_To_Read, "authorized", "UTF8"),
+    Next_NewSonar = case {Forward, Backward} of
+        {true, false} ->
+            case Next_sonar of
+                robot_front_left -> robot_front_right;
+                robot_front_right -> robot_front_left;
+                _ -> robot_front_left
+            end;
+        _ ->
+            Next_sonar
+    end,
+    % Retrieve the sonar distance
+    [{_, _, _, [_Distance]}] = hera_data:get(distance, Sonar_To_Read),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% DERIVE CONTROLS FROM INPUTS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     Adv_V_Goal = speed_ref(Forward, Backward),
@@ -93,7 +112,8 @@ robot_loop(State) ->
         robot_state => {Next_Robot_State, Robot_Up_New},
         kalman_state => {T1, X1, P1},
         move_speed => {Adv_V_Ref_New, Turn_V_Ref_New},
-        frequency => {N_New, Freq_New, Mean_Freq_New, T_End_New}
+        frequency => {N_New, Freq_New, Mean_Freq_New, T_End_New},
+        next_sonar => Next_NewSonar
     },
 
     robot_loop(NewState).
@@ -233,10 +253,18 @@ get_byte(List) ->
 i2c_read() ->
     %Receive I2C and conversion
     I2Cbus = persistent_term:get(i2c),
-    [<<SL1,SL2,SR1,SR2,CtrlByte>>] = grisp_i2c:transfer(I2Cbus, [{read, 16#40, 1, 5}]),
-    [Speed_L,Speed_R] = hera_com:decode_half_float([<<SL1, SL2>>, <<SR1, SR2>>]),
-    Speed = (Speed_L + Speed_R)/2,
-    {Speed, CtrlByte}.
+    case grisp_i2c:transfer(I2Cbus, [{read, 16#40, 1, 5}]) of
+        {[<<SL1,SL2,SR1,SR2,CtrlByte>>]} ->
+            [Speed_L,Speed_R] = hera_com:decode_half_float([<<SL1, SL2>>, <<SR1, SR2>>]),
+            Speed = (Speed_L + Speed_R)/2,
+            {Speed, CtrlByte};
+        {error, _Reason} ->
+            timer:sleep(5000),
+            i2c_read();
+        Other ->
+            io:format("[I2C ERROR] Unexpected response: ~p~n", [Other]),
+            {0.0, 0}
+    end.
 
 i2c_write(Acc, Turn_V_Ref_New, Output_Byte) ->
     I2Cbus = persistent_term:get(i2c),

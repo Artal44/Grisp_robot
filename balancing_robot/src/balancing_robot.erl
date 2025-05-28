@@ -19,45 +19,43 @@ start(_Type, _Args) ->
     if 
         Id == 0->
             io:format("[ROBOT_MAIN] GRiSP ID : ~p~n", [Id]),
-            persistent_term:put(name, list_to_atom("ROBOT_MAIN")),
-            add_device(spi2, pmod_nav),
+            persistent_term:put(name, robot_main),
+            add_GRISP_device(spi2, pmod_nav),
             pmod_nav:config(acc, #{odr_g => {hz,238}}),
-            add_device(uart, pmod_maxsonar),
+            add_GRISP_device(uart, pmod_maxsonar),
             timer:sleep(2000),
             spawn(main_loop, robot_init, []);
         Id == 1 ->
-            io:format("[ROBOT_SONAR_LEFT] GRiSP ID : ~p~n", [Id]),
-            persistent_term:put(name, list_to_atom("ROBOT_SONAR_LEFT")),
-            add_device(uart, pmod_maxsonar),
+            io:format("[ROBOT_FRONT_LEFT] GRiSP ID : ~p~n", [Id]),
+            persistent_term:put(name, robot_front_left),
+            add_GRISP_device(uart, pmod_maxsonar),
             timer:sleep(2000);
-            % spawn(sonar_detection, sonar_init, [Id]);
         Id == 2 ->
-            io:format("[ROBOT_SONAR_RIGHT] GRiSP ID : ~p~n", [Id]),
-            persistent_term:put(name, list_to_atom("ROBOT_SONAR_RIGHT")),
-            add_device(uart, pmod_maxsonar),
+            io:format("[ROBOT_FRONT_RIGHT] GRiSP ID : ~p~n", [Id]),
+            persistent_term:put(name, robot_front_right),
+            add_GRISP_device(uart, pmod_maxsonar),
             timer:sleep(2000)
-            % spawn(sonar_detection, sonar_init, [Id])
     end,
     
-    hera_subb:subscribe(self()),
+    hera_subscribe:subscribe(self()),
     config(),
     loop(),
     {ok, Supervisor}.
 
 stop(_State) -> ok.
 
-add_device(Port, Name) ->
+add_GRISP_device(Port, Name) ->
     case grisp:add_device(Port, Name) of
         {device, _, _, _, _} = DeviceInfo ->
             io:format("[~p] Device ~p added (info: ~p)~n", [persistent_term:get(name), Name, DeviceInfo]);
         {error, Reason} ->
             io:format("[~p] Device ~p not added: ~p~n", [persistent_term:get(name), Name, Reason]),
             timer:sleep(2000),
-            add_device(Port, Name);
+            add_GRISP_device(Port, Name);
         Other ->
             io:format("[~p] Unexpected return from grisp:add_device(~p, ~p): ~p~n", [persistent_term:get(name), Port, Name, Other]),
             timer:sleep(2000),
-            add_device(Port, Name)
+            add_GRISP_device(Port, Name)
     end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -149,8 +147,9 @@ add_device(Name, SIp, SPort) ->
     % @param Name : name of the device to register (String)
     % @param SIp : IP adress (String)
     % @param SPort : Port (String)
+    SelfName = persistent_term:get(name),
     case list_to_atom(Name) of 
-        robot -> % Don't register self
+        SelfName -> % Don't register self
             ok;
         OName ->             
             {ok, Ip} = inet:parse_address(SIp),
@@ -163,7 +162,7 @@ start_measures() ->
     % Launch all the hera_measure modules to gather data
     io:format("=================================================================================================~n"),
     io:format("~n~n[~p] Start received, starting the computing phase~n", [persistent_term:get(name)]),            
-    {ok, Sonar_Pid} = hera:start_measure(sonar_detection, []),
+    {ok, Sonar_Pid} = hera:start_measure(sonar_detection, [persistent_term:get(name)]),
     persistent_term:put(sonar_detection, Sonar_Pid),
     [grisp_led:color(L, green) || L <- [1, 2]],
     loop(). 
