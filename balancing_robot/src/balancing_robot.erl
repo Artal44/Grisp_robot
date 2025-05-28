@@ -41,6 +41,7 @@ start(_Type, _Args) ->
     
     hera_subb:subscribe(self()),
     config(),
+    loop(),
     {ok, Supervisor}.
 
 stop(_State) -> ok.
@@ -97,8 +98,7 @@ discover_server() ->
 
 ack_loop() ->
     % Tries to pair with the server by a Hello -> Ack
-    % @param Id : Sensor's Id set by the jumpers (Integer)
-    Payload = io_lib:format("Hello from ~p", [persistent_term:get(name)]),
+    Payload = "Hello from " ++ atom_to_list(persistent_term:get(name)),
     send_udp_message(server, Payload, "UTF8"),
     receive
         {hera_notify, ["Ack", _]} -> % Ensures the discovery of the sensor by the server
@@ -115,6 +115,92 @@ send_udp_message(Name, Message, Type) ->
     % @param Message : message to be sent (String/Tuple)
     % @param Type : type of message, can be UTF8 or Binary (String)
     hera_com:send_unicast(Name, Message, Type).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% LOOP %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+loop() ->
+    receive 
+        {hera_notify, ["Add_Device", Name, SIp, Port]} ->  % Received at config time to register all used sensors 
+            add_device(Name, SIp, Port);          
+        {hera_notify, ["Start", _]} -> % Received at the end of the configuration to launch the simulation
+            start_measures();
+        {hera_notify, ["Exit"]} -> % Received when gracefully exited the controller
+            io:format("~n[~p] Exit message received~n", [persistent_term:get(name)]),
+            reset_state();
+        {hera_notify, ["ping", _, _, _]} -> % Ignore the pings after server discovery
+            loop();
+        {hera_notify, Msg} -> % Unhandled Message
+            io:format("[~p] Received unhandled message : ~p~n", [persistent_term:get(name), Msg]),
+            loop();
+        Msg -> % Message not from hera_notify
+            io:format("[~p] receive strange message : ~p~n",[persistent_term:get(name), Msg]),
+            loop()
+    end.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% LOOP FUNCTIONS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+add_device(Name, SIp, SPort) ->
+    % Adds a device to the list of known devices
+    % @param Id : Sensor's Id set by the jumpers (Integer)
+    % @param Name : name of the device to register (String)
+    % @param SIp : IP adress (String)
+    % @param SPort : Port (String)
+    case list_to_atom(Name) of 
+        robot -> % Don't register self
+            ok;
+        OName ->             
+            {ok, Ip} = inet:parse_address(SIp),
+            Port = list_to_integer(SPort),
+            hera_com:add_device(OName, Ip, Port)      
+    end,            
+    loop().
+
+start_measures() ->
+    % Launch all the hera_measure modules to gather data
+    io:format("=================================================================================================~n"),
+    io:format("~n~n[~p] Start received, starting the computing phase~n", [persistent_term:get(name)]),            
+    {ok, Sonar_Pid} = hera:start_measure(sonar_detection, []),
+    persistent_term:put(sonar_detection, Sonar_Pid),
+    [grisp_led:color(L, green) || L <- [1, 2]],
+    loop(). 
+
+reset_state() ->
+    % Kills all hera_measures modules, resets all data and jump back to server discovery
+    %exit_measure_module(sonar_sensor),
+    exit_measure_module(sonar_detection),
+
+    timer:sleep(500),
+    reset_data(),
+
+    grisp_led:flash(2, white, 1000),      
+    grisp_led:flash(1, green, 1000),      
+
+    discover_server(),            
+    io:format("[~p] Waiting for start signal ...~n~n", [persistent_term:get(name)]),
+    loop().
+
+reset_data() ->
+    % Delete all config dependent and hera_measures data
+    persistent_term:erase(sonar_detection),
+    hera_com:reset_devices(), 
+    hera_data:reset(),
+    io:format("[~p] Data resetted~n~n~n~n", [persistent_term:get(name)]),
+    io:format("=================================================================================================~n").
+
+exit_measure_module(Name) ->
+    % Kills a module stored in persistent term
+    % @param Name : the name of the module (atom)
+    Pid = persistent_term:get(Name, none),    
+    case Pid of
+        none ->
+            ok;
+        _ -> 
+            exit(Pid, shutdown)
+    end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% GRISP ID %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
