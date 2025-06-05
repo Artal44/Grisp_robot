@@ -1,4 +1,4 @@
--module(main_loop).
+-module(main_bugging).
 
 -export([robot_init/0]).
 
@@ -18,17 +18,17 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% INITIALISATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
 robot_init() ->
-
     process_flag(priority, max),
 
     % Start flashing LED 1 and 2 yellow until calibration and kalman inits are done
+    io:format("[ROBOT] Calibrating the initial state... Do not move the pmod_nav!~n"),
     [grisp_led:flash(L, yellow, 500) || L <- [1, 2]],
     calibrate(),
     {X0, P0} = init_kalman(),
-    % {Old_X0, Old_P0} = old_init_kalman(),
+    {Old_X0, Old_P0} = old_init_kalman(),
     persistent_term:put(first_kalman_cycle, true),
+    io:format("[ROBOT] Done calibrating~n"),
     [grisp_led:off(L) || L <- [1, 2]],
 
     %I2C bus
@@ -36,8 +36,8 @@ robot_init() ->
     persistent_term:put(i2c, I2Cbus),
 
     % PIDs initialization with adjusted gains
-    Pid_Speed = spawn(pid_controller, pid_init, [-0.08, -0.04, 0.0, -1, 30.0, 0.0]), 
-    Pid_Stability = spawn(pid_controller, pid_init, [19.6, 0.0, 6.0, -1, -1, 0.0]), 
+    Pid_Speed = spawn(pid_controller, pid_init, [-0.08, -0.04, 0.0, -1, 20.0, 0.0]), % Adjusted Kp and Ki
+    Pid_Stability = spawn(pid_controller, pid_init, [18.0, 0.0, 6.0, -1, -1, 0.0]), % Adjusted Kp and Kd
     persistent_term:put(controllers, {Pid_Speed, Pid_Stability}),
     persistent_term:put(freq_goal, 300.0),
 
@@ -47,7 +47,7 @@ robot_init() ->
     State = #{
         robot_state => {rest, false}, %{Robot_State, Robot_Up}
         kalman_state => {T0, X0, P0}, %{Tk, Xk, Pk}
-        % old_kalman_state => {T0, Old_X0, Old_P0}, %{Tk, Xk, Pk}
+        old_kalman_state => {T0, Old_X0, Old_P0}, % {Old_Tk, Old_Xk, Old_Pk}
         move_speed => {0.0, 0.0}, % {Adv_V_Ref, Turn_V_Ref}
         frequency => {0, 0, 200.0, T0}, %{N, Freq, Mean_Freq, T_End}
 	    acc_prev => 0.0
@@ -56,21 +56,26 @@ robot_init() ->
     robot_loop(State).
 
 robot_loop(State) ->
-
     % Set LEDs 1 and 2 to blue to indicate main loop running
     [grisp_led:color(L, aqua) || L <- [1, 2]],
+
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% PARSE STATE MAP %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%    
     {Robot_State, Robot_Up} = maps:get(robot_state, State),
     {Tk, Xk, Pk} = maps:get(kalman_state, State),
-    % {Old_Tk, Old_Xk, Old_Pk} = maps:get(old_kalman_state, State),
+    {Old_Tk, Old_Xk, Old_Pk} = maps:get(old_kalman_state, State),
     {Adv_V_Ref, Turn_V_Ref} = maps:get(move_speed, State),
     {N, Freq, Mean_Freq, T_End} = maps:get(frequency, State), 
     Acc_Prev = maps:get(acc_prev, State),
 
+    % if N rem 10 == 0 ->  % only every 10 loops
+    %     io:format("[LOG] Robot loop frequency: ~.2f~n", [float(Freq)]);
+    % true -> ok
+    % end,
+
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% COMPUTE Dt BETWEEN ITERATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     T1 = erlang:system_time()/1.0e6,
     Dt = (T1- Tk)/1000.0,
-    % Old_Dt = (T1 - Old_Tk)/1000.0,
+    Old_Dt = (T1 - Old_Tk)/1000.0,
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% GET NEW PMOD_NAV MEASURE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     [Gy, Ax, Az] = pmod_nav:read(acc, [out_y_g, out_x_xl, out_z_xl], #{g_unit => dps}),
@@ -87,13 +92,13 @@ robot_loop(State) ->
     Acc_Prev_Rad = Acc_Prev * math:pi() / 180.0,
     [Angle, {X1, P1}] = kalman_angle(Dt, Ax, Az, Gy, Acc_Prev_Rad, Xk, Pk),
 
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% MEASURED DIRECT ANGLE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    % Timestamp = erlang:system_time(millisecond),
-    % Direct_angle = math:atan(Az / (-Ax)) * ?RAD_TO_DEG,
-    % [Old_Angle, {Old_X1, Old_P1}] = old_kalman_angle(Old_Dt, Ax, Az, Gy, Old_Xk, Old_Pk),
-    % io:format("[LOG] Time=~p, NEW Kalman=~.2f, OLD Kalman=~.2f, Measured=~.2f~n", [Timestamp, Angle, Old_Angle, Direct_angle]),
-    % io:format("[LOG] Time=~p, Speed=~.2f, Adv_V_Goal=~.2f, Turn_V_Goal=~.2f~n", [Timestamp, Speed, Adv_V_Goal, Turn_V_Goal]), 
-
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN COMPARISONS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    [Old_Angle, {Old_X1, Old_P1}] = old_kalman_angle(Old_Dt, Ax, Az, Gy, Old_Xk, Old_Pk),
+    Direct_angle = math:atan(Az / (-Ax)) * ?RAD_TO_DEG,
+    
+    io:format("[LOG] NEW Kalman=~.2f, OLD Kalman=~.2f, Measured=~.2f~n", [Angle, Old_Angle, Direct_angle]),
+    % io:format("[LOG] Speed=~.2f, Adv_V_Goal=~.2f, Turn_V_Goal=~.2f~n", [Speed, Adv_V_Goal, Turn_V_Goal]),
+  
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SET NEW ENGINES COMMANDS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {Acc, Adv_V_Ref_New, Turn_V_Ref_New} = stability_engine:controller({Dt, Angle, Speed}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal, Turn_V_Ref}, N),
 
@@ -114,28 +119,23 @@ robot_loop(State) ->
     NewState = State#{
         robot_state => {Next_Robot_State, Robot_Up_New},
         kalman_state => {T1, X1, P1},
-        % old_kalman_state => {T1, Old_X1, Old_P1},
+        old_kalman_state => {T1, Old_X1, Old_P1},
         move_speed => {Adv_V_Ref_New, Turn_V_Ref_New},
         frequency => {N_New, Freq_New, Mean_Freq_New, T_End_New},
         acc_prev => Acc
     },
-
     robot_loop(NewState).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% CONFIG FUNCTIONS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
 calibrate() ->
-    io:format("[ROBOT] Calibrating the initial state... Do not move the pmod_nav!~n"),
     N = 500,
     Y_List = [pmod_nav:read(acc, [out_y_g]) || _ <- lists:seq(1, N)],
     Gy0 = lists:sum([Y || [Y] <- Y_List]) / N,
-    io:format("[ROBOT] Done calibrating~n"),
     persistent_term:put(gy0, Gy0).
 
 calibrate_initial_state() ->
-    io:format("[ROBOT] Calibrating initial state...~n"),
     N = 500, % Increase the number of samples for better accuracy
     Measurements = [pmod_nav:read(acc, [out_x_xl, out_z_xl, out_y_g]) || _ <- lists:seq(1, N)],
     {Ax_Sum, Az_Sum, Gy_Sum} = lists:foldl(
@@ -152,7 +152,8 @@ calibrate_initial_state() ->
     % Compute the initial angle and angular velocity
     Initial_Angle = math:atan(Az_Avg / (-Ax_Avg)) * ?RAD_TO_DEG,
     Initial_Angular_Velocity = (Gy_Avg - persistent_term:get(gy0)) * ?DEG_TO_RAD, % Subtract gyroscope bias
-    io:format("[LOG] Initial Angle: ~.2f, Initial Angular Velocity: ~.2f~n", [Initial_Angle, Initial_Angular_Velocity]),
+
+    io:format("[ROBOT] Initial Angle: ~.2f, Initial Angular Velocity: ~.2f~n", [Initial_Angle, Initial_Angular_Velocity]),
     {Initial_Angle, Initial_Angular_Velocity}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -160,33 +161,35 @@ calibrate_initial_state() ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 init_kalman() ->
     % Adjusted Kalman constants
-    R = mat:matrix([[3.0, 0.0], [0, 1.0e-5]]),
-    Q = mat:matrix([[1.0e-4, 0.0], [0.0, 2.0]]),    
+    R = mat:matrix([[3.0, 0.0], [0, 0.005]]),
+    Q = mat:matrix([[0.05, 0.0], [0.0, 0.3]]),
 
-    % Model constants
-    G = ?g,
     Hh = ?h + (?I / (?M * ?h)),
+    G = ?g,
+
+    io:format("Inertia: ~.2f, Height: ~.2f, G: ~.2f, Hh: ~.2f~n", [?I, ?h, G, Hh]),
 
     Jh = fun (_) -> mat:matrix([[1, 0], [0, 1]]) end,
-    persistent_term:put(kalman_constant, {R, Q, Jh, G, Hh}),
+
+    persistent_term:put(kalman_constant, {R, Q, Jh, Hh, G}),
 
     % Initial State and Covariance matrices
     {Initial_Angle, Initial_Angular_Velocity} = calibrate_initial_state(),
     X0 = mat:matrix([[Initial_Angle], [Initial_Angular_Velocity]]),
-    P0 = mat:matrix([[0.2, 0], [0, 0.2]]), % Slightly increased initial covariance
+    P0 = mat:matrix([[1.0, 0], [0, 1.0]]), 
     {X0, P0}.
 
 kalman_angle(Dt, Ax, Az, Gy, U, X0, P0) ->
     Gy0 = persistent_term:get(gy0),
-    {R, Q, Jh, G, Hh} = persistent_term:get(kalman_constant),
+    {R, Q, Jh, Hh, G} = persistent_term:get(kalman_constant),
 
     % Nonlinear state model (digital twin)
-    F = fun (X, U1) ->
+    F = fun (X) ->
         Arr = mat:to_array(X),
             case Arr of
                 [Th, W] ->
                     Th1 = Th + W * Dt,
-                    W1 = W + ((G / Hh) * math:sin(Th) - (U1 / Hh) * math:cos(Th)) * Dt,
+                    W1 = W + ((G / Hh) * math:sin(Th) - (U / Hh) * math:cos(Th)) * Dt,
                     mat:matrix([[Th1], [W1]]);
                 _ ->
                     error({unexpected_state_vector, Arr})
@@ -205,34 +208,28 @@ kalman_angle(Dt, Ax, Az, Gy, U, X0, P0) ->
     H = fun (X) ->
         [Th, W] = mat:to_array(X),
         mat:matrix([[Th], [W]])
-    end,
+    end, 
 
     % Measurement vector: angle from accelerometer, angular velocity from gyro
     Z = mat:matrix([[math:atan(Az / (-Ax))], [(Gy - Gy0) * ?DEG_TO_RAD]]),
     FirstCycle = persistent_term:get(first_kalman_cycle, true),
 
-    {X1, P1} = case FirstCycle of
-        true ->
-            % Directly set to measured value, skip predict step
-            persistent_term:put(first_kalman_cycle, false),
-            {Z, P0};
-        false ->
-            kalman:ekf_control({X0, P0}, {F, Jf}, {H, Jh}, Q, R, Z, U)
-    end,
-    KalmanArr = mat:to_array(X1),
-    case KalmanArr of
-        [Th_Kalman, _W_Kalman] ->
-            Wrap_Th_Kalman = math:fmod(Th_Kalman + math:pi(), 2*math:pi()) - math:pi(),
-            Angle = Wrap_Th_Kalman * ?RAD_TO_DEG,
-            [Angle, {X1, P1}];
-        _ ->
-            error({unexpected_kalman_result, KalmanArr})
-    end.
+    {X1, P1} =
+        case FirstCycle of
+            true ->
+                persistent_term:put(first_kalman_cycle, false),
+                {X0, P0};
+            false ->
+                kalman:ekf({X0, P0}, {F, Jf}, {H, Jh}, Q, R, Z)
+        end,
+
+    [Th_Kalman, _W_Kalman] = mat:to_array(X1),
+    Angle = Th_Kalman * ?RAD_TO_DEG,
+    [Angle, {X1, P1}].
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% OLD KALMAN COMPUTATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
 old_init_kalman() ->
     % Initiating kalman constants
     R = mat:matrix([[3.0, 0.0], [0, 3.0e-6]]),
@@ -250,7 +247,7 @@ old_init_kalman() ->
 old_kalman_angle(Dt, Ax, Az, Gy, X0, P0) ->
     Gy0 = persistent_term:get(gy0),
     {R, Q, Jh} = persistent_term:get(old_kalman_constant),
-    
+
     F = fun (X) -> [Th, W] = mat:to_array(X),
 				mat:matrix([ 	[Th+Dt*W],
 								[W      ] ])
@@ -273,7 +270,6 @@ old_kalman_angle(Dt, Ax, Az, Gy, X0, P0) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% ROBOT STATE LOGIC %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
 get_robot_state(Robot_State) -> % {Robot_state, Robot_Up, Get_Up, Arm_ready, Angle}
     case Robot_State of
         {rest, _, true, _, _} -> raising;
@@ -347,7 +343,6 @@ get_byte(List) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% I2C COMMUNICATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
 i2c_read() ->
     %Receive I2C and conversion
     I2Cbus = persistent_term:get(i2c),
@@ -364,7 +359,6 @@ i2c_write(Acc, Turn_V_Ref_New, Output_Byte) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% MISCELLANIOUS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
 speed_ref(Forward, Backward) ->
     if
         Forward ->
