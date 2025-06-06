@@ -2,9 +2,10 @@
 
 -behavior(application).
 
--export([start/2, stop/1]).
+-export([start/2, stop/1, dump_logs/0]).
 
-    
+% balancing_robot:dump_logs(). 
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% GRiSP STARTUP %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -12,26 +13,40 @@
 start(_Type, _Args) ->
     {ok, Supervisor} = balancing_robot_sup:start_link(),
     [grisp_led:flash(L, yellow, 500) || L <- [1, 2]],
-	_ = grisp:add_device(spi2, pmod_nav),
+
+    % Log buffer initialization
+    log_buffer:init(1000),
+    log_buffer:add({balancing_robot, erlang:system_time(millisecond), startup}),
+
+    _ = grisp:add_device(spi2, pmod_nav),
     pmod_nav:config(acc, #{odr_g => {hz,238}}),
 
     _ = grisp:add_device(uart, pmod_maxsonar),
     numerl:init(),
     timer:sleep(2000),
+
     {ok, Id} = get_grisp_id(),
-    if 
-        Id == 0->
-            io:format("[ROBOT] GRiSP ID : ~p~n", [Id]),
+    case Id of
+        0 ->
+            log_buffer:add({balancing_robot, erlang:system_time(millisecond), main_robot}),
             spawn(main_loop, robot_init, []);
-        Id == 1;
-        Id == 2 ->
-            io:format("[SONAR] GRiSP ID : ~p~n", [Id])
-            % spawn(sonar_detection, sonar_init, [Id])
+        1 ->
+            log_buffer:add({balancing_robot, erlang:system_time(millisecond), left_sonar});
+        2 ->
+            log_buffer:add({balancing_robot, erlang:system_time(millisecond), right_sonar});
+        _ ->
+            log_buffer:add({balancing_robot, erlang:system_time(millisecond), unknown_id})
     end,
-    
+
     {ok, Supervisor}.
 
-stop(_State) -> ok.
+
+stop(_State) -> 
+    dump_logs(),
+    ok.
+
+dump_logs() ->
+    log_buffer:dump_to_console().
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% GRISP ID %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

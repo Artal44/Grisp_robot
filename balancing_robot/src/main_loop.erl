@@ -24,11 +24,13 @@ robot_init() ->
     process_flag(priority, max),
 
     % Start flashing LED 1 and 2 yellow until calibration and kalman inits are done
+    log_buffer:add({main_loop, erlang:system_time(millisecond), calibrating}),
     [grisp_led:flash(L, yellow, 500) || L <- [1, 2]],
     calibrate(),
     {X0, P0} = init_kalman(),
-    % {Old_X0, Old_P0} = old_init_kalman(),
+    {Old_X0, Old_P0} = old_init_kalman(),
     persistent_term:put(first_kalman_cycle, true),
+    log_buffer:add({main_loop, erlang:system_time(millisecond), done_calibrating}),
     [grisp_led:off(L) || L <- [1, 2]],
 
     %I2C bus
@@ -36,18 +38,19 @@ robot_init() ->
     persistent_term:put(i2c, I2Cbus),
 
     % PIDs initialization with adjusted gains
-    Pid_Speed = spawn(pid_controller, pid_init, [-0.08, -0.04, 0.0, -1, 30.0, 0.0]), 
-    Pid_Stability = spawn(pid_controller, pid_init, [19.6, 0.0, 6.0, -1, -1, 0.0]), 
+    %Pid_Speed = spawn(pid_controller, pid_init, [-0.085, -0.009, 0.0, -1, 50.0, 0.0]), 
+    Pid_Speed = spawn(pid_controller, pid_init, [-0.065, -0.009, 0.0, -1, 50.0, 0.0]), 
+    Pid_Stability = spawn(pid_controller, pid_init, [19.6, 0.0, 5.8, -1, -1, 0.0]), 
     persistent_term:put(controllers, {Pid_Speed, Pid_Stability}),
     persistent_term:put(freq_goal, 300.0),
 
     T0 = erlang:system_time()/1.0e6,
-	io:format("[ROBOT] Robot ready.~n"),
+    log_buffer:add({main_loop, erlang:system_time(millisecond), robot_ready}),
 
     State = #{
         robot_state => {rest, false}, %{Robot_State, Robot_Up}
         kalman_state => {T0, X0, P0}, %{Tk, Xk, Pk}
-        % old_kalman_state => {T0, Old_X0, Old_P0}, %{Tk, Xk, Pk}
+        old_kalman_state => {Old_X0, Old_P0}, %{Old_Xk, Old_Pk}
         move_speed => {0.0, 0.0}, % {Adv_V_Ref, Turn_V_Ref}
         frequency => {0, 0, 200.0, T0}, %{N, Freq, Mean_Freq, T_End}
 	    acc_prev => 0.0
@@ -59,18 +62,20 @@ robot_loop(State) ->
 
     % Set LEDs 1 and 2 to blue to indicate main loop running
     [grisp_led:color(L, aqua) || L <- [1, 2]],
+
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% PARSE STATE MAP %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%    
     {Robot_State, Robot_Up} = maps:get(robot_state, State),
     {Tk, Xk, Pk} = maps:get(kalman_state, State),
-    % {Old_Tk, Old_Xk, Old_Pk} = maps:get(old_kalman_state, State),
+    {Old_Xk, Old_Pk} = maps:get(old_kalman_state, State),
     {Adv_V_Ref, Turn_V_Ref} = maps:get(move_speed, State),
     {N, Freq, Mean_Freq, T_End} = maps:get(frequency, State), 
     Acc_Prev = maps:get(acc_prev, State),
 
+    log_buffer:add({main_loop, erlang:system_time(millisecond), robot_frequency, [Freq, N, Mean_Freq, T_End]}),
+
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% COMPUTE Dt BETWEEN ITERATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     T1 = erlang:system_time()/1.0e6,
     Dt = (T1- Tk)/1000.0,
-    % Old_Dt = (T1 - Old_Tk)/1000.0,
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% GET NEW PMOD_NAV MEASURE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     [Gy, Ax, Az] = pmod_nav:read(acc, [out_y_g, out_x_xl, out_z_xl], #{g_unit => dps}),
@@ -88,14 +93,12 @@ robot_loop(State) ->
     [Angle, {X1, P1}] = kalman_angle(Dt, Ax, Az, Gy, Acc_Prev_Rad, Xk, Pk),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% MEASURED DIRECT ANGLE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    % Timestamp = erlang:system_time(millisecond),
-    % Direct_angle = math:atan(Az / (-Ax)) * ?RAD_TO_DEG,
-    % [Old_Angle, {Old_X1, Old_P1}] = old_kalman_angle(Old_Dt, Ax, Az, Gy, Old_Xk, Old_Pk),
-    % io:format("[LOG] Time=~p, NEW Kalman=~.2f, OLD Kalman=~.2f, Measured=~.2f~n", [Timestamp, Angle, Old_Angle, Direct_angle]),
-    % io:format("[LOG] Time=~p, Speed=~.2f, Adv_V_Goal=~.2f, Turn_V_Goal=~.2f~n", [Timestamp, Speed, Adv_V_Goal, Turn_V_Goal]), 
+    Direct_angle = math:atan(Az / (-Ax)) * ?RAD_TO_DEG,
+    [Old_Angle, {Old_X1, Old_P1}] = old_kalman_angle(Dt, Ax, Az, Gy, Old_Xk, Old_Pk),
+    log_buffer:add({main_loop, erlang:system_time(millisecond), kalman_comparison, [Angle, Old_Angle, Direct_angle]}),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SET NEW ENGINES COMMANDS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    {Acc, Adv_V_Ref_New, Turn_V_Ref_New} = stability_engine:controller({Dt, Angle, Speed}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal, Turn_V_Ref}, N),
+    {Acc, Adv_V_Ref_New, Turn_V_Ref_New} = stability_engine:controller({Dt, Angle, Speed}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal, Turn_V_Ref}),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% DETERMINE NEW ROBOT STATE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     Robot_Up_New = is_robot_up(Angle, Robot_Up),
@@ -114,7 +117,7 @@ robot_loop(State) ->
     NewState = State#{
         robot_state => {Next_Robot_State, Robot_Up_New},
         kalman_state => {T1, X1, P1},
-        % old_kalman_state => {T1, Old_X1, Old_P1},
+        old_kalman_state => {Old_X1, Old_P1},
         move_speed => {Adv_V_Ref_New, Turn_V_Ref_New},
         frequency => {N_New, Freq_New, Mean_Freq_New, T_End_New},
         acc_prev => Acc
@@ -127,15 +130,12 @@ robot_loop(State) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 calibrate() ->
-    io:format("[ROBOT] Calibrating the initial state... Do not move the pmod_nav!~n"),
     N = 500,
     Y_List = [pmod_nav:read(acc, [out_y_g]) || _ <- lists:seq(1, N)],
     Gy0 = lists:sum([Y || [Y] <- Y_List]) / N,
-    io:format("[ROBOT] Done calibrating~n"),
     persistent_term:put(gy0, Gy0).
 
 calibrate_initial_state() ->
-    io:format("[ROBOT] Calibrating initial state...~n"),
     N = 500, % Increase the number of samples for better accuracy
     Measurements = [pmod_nav:read(acc, [out_x_xl, out_z_xl, out_y_g]) || _ <- lists:seq(1, N)],
     {Ax_Sum, Az_Sum, Gy_Sum} = lists:foldl(
@@ -152,7 +152,7 @@ calibrate_initial_state() ->
     % Compute the initial angle and angular velocity
     Initial_Angle = math:atan(Az_Avg / (-Ax_Avg)) * ?RAD_TO_DEG,
     Initial_Angular_Velocity = (Gy_Avg - persistent_term:get(gy0)) * ?DEG_TO_RAD, % Subtract gyroscope bias
-    io:format("[LOG] Initial Angle: ~.2f, Initial Angular Velocity: ~.2f~n", [Initial_Angle, Initial_Angular_Velocity]),
+    log_buffer:add({main_loop, erlang:system_time(millisecond), kalman_calibration, [Initial_Angle, Initial_Angular_Velocity]}),
     {Initial_Angle, Initial_Angular_Velocity}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -160,7 +160,7 @@ calibrate_initial_state() ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 init_kalman() ->
     % Adjusted Kalman constants
-    R = mat:matrix([[3.0, 0.0], [0, 1.0e-5]]),
+    R = mat:matrix([[3.0, 0.0], [0, 3.0e-6]]),
     Q = mat:matrix([[1.0e-4, 0.0], [0.0, 2.0]]),    
 
     % Model constants
@@ -173,7 +173,7 @@ init_kalman() ->
     % Initial State and Covariance matrices
     {Initial_Angle, Initial_Angular_Velocity} = calibrate_initial_state(),
     X0 = mat:matrix([[Initial_Angle], [Initial_Angular_Velocity]]),
-    P0 = mat:matrix([[0.2, 0], [0, 0.2]]), % Slightly increased initial covariance
+    P0 = mat:matrix([[0.01, 0], [0, 0.01]]), % Slightly increased initial covariance
     {X0, P0}.
 
 kalman_angle(Dt, Ax, Az, Gy, U, X0, P0) ->
@@ -358,8 +358,12 @@ i2c_read() ->
 
 i2c_write(Acc, Turn_V_Ref_New, Output_Byte) ->
     I2Cbus = persistent_term:get(i2c),
-    [HF1, HF2] = hera_com:encode_half_float([Acc, Turn_V_Ref_New]),
-    grisp_i2c:transfer(I2Cbus, [{write, 16#40, 1, [HF1, HF2, <<Output_Byte>>]}]).
+    case hera_com:encode_half_float([Acc, Turn_V_Ref_New]) of
+        [HF1, HF2] ->
+            grisp_i2c:transfer(I2Cbus, [{write, 16#40, 1, [HF1, HF2, <<Output_Byte>>]}]);
+        Error ->
+            log_buffer:add({i2c_error, erlang:system_time(millisecond), Error})
+    end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% MISCELLANIOUS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
