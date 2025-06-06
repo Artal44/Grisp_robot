@@ -15,7 +15,7 @@ start(_Type, _Args) ->
     [grisp_led:flash(L, yellow, 500) || L <- [1, 2]],
 
     % Log buffer initialization
-    log_buffer:init(1000),
+    log_buffer:init(5000),
     log_buffer:add({balancing_robot, erlang:system_time(millisecond), startup}),
 
     _ = grisp:add_device(spi2, pmod_nav),

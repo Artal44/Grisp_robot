@@ -7,12 +7,12 @@
 
 -define(ADV_V_MAX, 30.0).
 -define(TURN_V_MAX, 80.0).
--define(g, 9.81).
--define(M, 3.4).
--define(h, 0.26). % Height of the robot center of mass
+-define(g, 9.81). % Gravity in m/s²
+-define(M, 3.4). % Mass of the robot (kg)
+-define(h, 0.26). % Height of the robot center of mass (m)
 
--define(width, 0.185). % Width of the robot (cm)
--define(height, 0.95). % Height of the robot (cm)
+-define(width, 0.185). % Width of the robot (m)
+-define(height, 0.95). % Height of the robot (m)
 -define(I, ?M * (math:pow(?width, 2) + math:pow(?height, 2)) / 12). % I = M * (w² + h²) / 12 (rectangular parallelepiped)
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -89,7 +89,8 @@ robot_loop(State) ->
     Turn_V_Goal = turn_ref(Left, Right),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN COMPUTATIONS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    Acc_Prev_Rad = Acc_Prev * math:pi() / 180.0,
+    Acc_Prev_Rad = Acc_Prev * math:pi() / 180.0, % Acc_Prev is in cm/s**2 in what should we change it to?
+    
     [Angle, {X1, P1}] = kalman_angle(Dt, Ax, Az, Gy, Acc_Prev_Rad, Xk, Pk),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% MEASURED DIRECT ANGLE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
