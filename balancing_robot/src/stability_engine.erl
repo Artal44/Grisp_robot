@@ -18,13 +18,21 @@ controller({Dt, Angle, Speed}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal, Turn_V_Ref
     Pid_Speed ! {self(), {set_point, Adv_V_Ref_New}},
     Pid_Speed ! {self(), {input, Speed}},
     receive {_, {control, Target_angle}} -> ok end,
+    Timestamp = erlang:system_time(millisecond),
+
+    % Adjust the target angle based on the speed: the robot should lean in the direction it is moving forward or backward
+    % But the acceleration of the top and bottom of a rectangular paralelepided robot is not the same, so we need to adjust the angle accordingly
 
     % Stability PD
     Pid_Stability ! {self(), {set_point, Target_angle}},
     Pid_Stability ! {self(), {input, Angle}},
     receive {_, {control, Acc}} -> ok end,
+    Acc_Limited = lists:max([-600.0, lists:min([Acc, 600.0])]),
 
-    {Acc, Adv_V_Ref_New, Turn_V_Ref_New}.
+    log_buffer:add({stability_controller, Timestamp, speed_controller, [Adv_V_Ref_New, Speed, Target_angle]}),
+    log_buffer:add({stability_controller, Timestamp, stability_controller, [Target_angle, Angle, Acc_Limited]}),
+
+    {Acc_Limited, Adv_V_Ref_New, Turn_V_Ref_New}.
 
 saturate_acceleration(Goal, Ref, Dt, Accel, V_Max) ->
     case Goal of

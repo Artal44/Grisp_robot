@@ -13,7 +13,7 @@ import time
 class User_interface:
 
     # App General State
-    WIDTH, HEIGHT = 1920, 1080 # Screen Size
+    WIDTH, HEIGHT = 1920, 540 # Screen Size
     RESIZE = 2 # Resizing factor for the rooms
     running = True
     in_popup = False
