@@ -40,7 +40,6 @@ start(_Type, _Args) ->
 
     {ok, Supervisor}.
 
-
 stop(_State) -> 
     dump_logs(),
     ok.

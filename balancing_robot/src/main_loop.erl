@@ -53,14 +53,13 @@ robot_init() ->
         old_kalman_state => {Old_X0, Old_P0}, %{Old_Xk, Old_Pk}
         move_speed => {0.0, 0.0}, % {Adv_V_Ref, Turn_V_Ref}
         frequency => {0, 0, 200.0, T0}, %{N, Freq, Mean_Freq, T_End}
-	    acc_prev => 0.0,
+	      acc_prev => 0.0,
         prev_speed => 0.0
     }, 
 
     robot_loop(State).
 
 robot_loop(State) ->
-
     % Set LEDs 1 and 2 to blue to indicate main loop running
     [grisp_led:color(L, aqua) || L <- [1, 2]],
 
@@ -71,7 +70,6 @@ robot_loop(State) ->
     {Adv_V_Ref, Turn_V_Ref} = maps:get(move_speed, State),
     {N, Freq, Mean_Freq, T_End} = maps:get(frequency, State), 
     Acc_Prev = maps:get(acc_prev, State),
-
     log_buffer:add({main_loop, erlang:system_time(millisecond), robot_frequency, [Freq, N, Mean_Freq, T_End]}),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% COMPUTE Dt BETWEEN ITERATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -88,13 +86,33 @@ robot_loop(State) ->
     Acc_Estim = (Speed - Prev_Speed)/ Dt,
     Ka = 0.1, %valeur de correction a modif ( = h/g)
 
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% GET SONAR MEASUREMENTS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    % Determine which sonar to read based on forward/backward flags and current sonar
+    Sonar_To_Read = case {Forward, Backward} of
+        {true, false} -> Next_sonar;
+        {false, true} -> robot_main;
+        _ -> Next_sonar
+    end,
+    hera_com:send_unicast(Sonar_To_Read, "authorized", "UTF8"),
+    Next_NewSonar = case {Forward, Backward} of
+        {true, false} ->
+            case Next_sonar of
+                robot_front_left -> robot_front_right;
+                robot_front_right -> robot_front_left;
+                _ -> robot_front_left
+            end;
+        _ ->
+            Next_sonar
+    end,
+    % Retrieve the sonar distance
+    [{_, _, _, [Distance]}] = hera_data:get(distance, Sonar_To_Read),
+
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% DERIVE CONTROLS FROM INPUTS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     Adv_V_Goal = speed_ref(Forward, Backward),
     Turn_V_Goal = turn_ref(Left, Right),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN COMPUTATIONS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     Acc_Prev_Rad = Acc_Prev * math:pi() / 180.0, % Acc_Prev is in cm/s**2 in what should we change it to?
-
     [Angle, {X1, P1}] = kalman_angle(Dt, Ax, Az, Gy, Acc_Prev_Rad, Xk, Pk),
     Angle_Corr = Angle + Ka * Acc_Estim,
 
@@ -358,10 +376,20 @@ get_byte(List) ->
 i2c_read() ->
     %Receive I2C and conversion
     I2Cbus = persistent_term:get(i2c),
-    [<<SL1,SL2,SR1,SR2,CtrlByte>>] = grisp_i2c:transfer(I2Cbus, [{read, 16#40, 1, 5}]),
-    [Speed_L,Speed_R] = hera_com:decode_half_float([<<SL1, SL2>>, <<SR1, SR2>>]),
-    Speed = (Speed_L + Speed_R)/2,
-    {Speed, CtrlByte}.
+    case grisp_i2c:transfer(I2Cbus, [{read, 16#40, 1, 5}]) of
+        {[<<SL1,SL2,SR1,SR2,CtrlByte>>]} ->
+            [Speed_L,Speed_R] = hera_com:decode_half_float([<<SL1, SL2>>, <<SR1, SR2>>]),
+            Speed = (Speed_L + Speed_R)/2,
+            {Speed, CtrlByte};
+        {error, Reason} ->
+            io:format("[ROBOT][I2C ERROR] Error response: ~p~n", [{error, Reason}]),
+            timer:sleep(5000),
+            i2c_read();
+        Other ->
+            io:format("[ROBOT][I2C ERROR] Unexpected response: ~p~n", [Other]),
+            timer:sleep(5000),
+            i2c_read()
+    end.
 
 i2c_write(Acc, Turn_V_Ref_New, Output_Byte) ->
     I2Cbus = persistent_term:get(i2c),
