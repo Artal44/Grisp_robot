@@ -15,17 +15,41 @@ add(Entry) ->
 
 dump() ->
     L = ets:tab2list(logs),
-    lists:sort(fun({I1,_}, {I2,_}) -> I1 < I2 end, L).
+    lists:sort(
+        fun({_, Entry1}, {_, Entry2}) ->
+            TS1 = get_timestamp(Entry1),
+            TS2 = get_timestamp(Entry2),
+            TS1 < TS2
+        end, L).
+
+get_timestamp({_, TS, _, _}) -> TS;
+get_timestamp({_, TS, _, _, _}) -> TS;
+get_timestamp({_, TS}) -> TS;
+get_timestamp(Entry) when is_tuple(Entry), tuple_size(Entry) >= 2 -> element(2, Entry).
 
 %% Dumps all logs to console in order
 dump_to_console() ->
     L = dump(),
-    lists:foreach(fun({_, {Level, Timestamp, Category, Message}}) ->
-        CatStr = to_string(Category),
-        MsgStr = to_string(Message),
-        io:format("[~s] ~p | ~s | ~s~n",
-            [string:to_upper(atom_to_list(Level)), Timestamp, CatStr, MsgStr])
+    lists:foreach(fun({Index, Entry}) ->
+        case Entry of
+            {Level, Timestamp, Category, Message} ->
+                CatStr = to_string(Category),
+                MsgStr = to_string(Message),
+                io:format("[~s] ~p | ~s | ~s~n",
+                          [string:to_upper(atom_to_list(Level)), Timestamp, CatStr, MsgStr]);
+            {Level, Timestamp, Message} ->
+                MsgStr = to_string(Message),
+                io:format("[~s] ~p | ~s~n",
+                          [string:to_upper(atom_to_list(Level)), Timestamp, MsgStr]);
+            {Level, Timestamp} ->
+                io:format("[~s] ~p~n",
+                          [string:to_upper(atom_to_list(Level)), Timestamp]);
+            _ ->
+                io:format("~p~n", [Entry])
+        end,
+        ets:delete(logs, Index)  %% <-- delete the entry after printing
     end, L).
+
 
 to_string(Value) when is_binary(Value) ->
     binary_to_list(Value);
