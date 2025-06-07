@@ -13,7 +13,7 @@
 
 -define(width, 0.185). % Width of the robot (m)
 -define(height, 0.95). % Height of the robot (m)
--define(I, ?M * (math:pow(?width, 2) + math:pow(?height, 2)) / 12). % I = M * (w² + h²) / 12 (rectangular parallelepiped)
+-define(I, 0.1 + ?M * (math:pow(?width, 2) + math:pow(?height, 2)) / 12). % I = M * (w² + h²) / 12 (rectangular parallelepiped)
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% INITIALISATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -39,7 +39,7 @@ robot_init() ->
 
     % PIDs initialization with adjusted gains
     %Pid_Speed = spawn(pid_controller, pid_init, [-0.085, -0.009, 0.0, -1, 50.0, 0.0]), 
-    Pid_Speed = spawn(pid_controller, pid_init, [-0.065, -0.009, 0.0, -1, 50.0, 0.0]), 
+    Pid_Speed = spawn(pid_controller, pid_init, [-0.065, -0.03, 0.0, -1, 60.0, 0.0]), 
     Pid_Stability = spawn(pid_controller, pid_init, [19.6, 0.0, 5.8, -1, -1, 0.0]), 
     persistent_term:put(controllers, {Pid_Speed, Pid_Stability}),
     persistent_term:put(freq_goal, 300.0),
@@ -53,7 +53,8 @@ robot_init() ->
         old_kalman_state => {Old_X0, Old_P0}, %{Old_Xk, Old_Pk}
         move_speed => {0.0, 0.0}, % {Adv_V_Ref, Turn_V_Ref}
         frequency => {0, 0, 200.0, T0}, %{N, Freq, Mean_Freq, T_End}
-	    acc_prev => 0.0
+	    acc_prev => 0.0,
+        prev_speed => 0.0
     }, 
 
     robot_loop(State).
@@ -83,6 +84,9 @@ robot_loop(State) ->
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% GET INPUT FROM I2CBus %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {Speed, CtrlByte} = i2c_read(),
     [Arm_Ready, _, _, Get_Up, Forward, Backward, Left, Right] = hera_com:get_bits(CtrlByte),
+    Prev_Speed = maps:get(prev_speed,State),
+    Acc_Estim = (Speed - Prev_Speed)/ Dt,
+    Ka = 0.1, %valeur de correction a modif ( = h/g)
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% DERIVE CONTROLS FROM INPUTS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     Adv_V_Goal = speed_ref(Forward, Backward),
@@ -90,8 +94,9 @@ robot_loop(State) ->
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN COMPUTATIONS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     Acc_Prev_Rad = Acc_Prev * math:pi() / 180.0, % Acc_Prev is in cm/s**2 in what should we change it to?
-    
+
     [Angle, {X1, P1}] = kalman_angle(Dt, Ax, Az, Gy, Acc_Prev_Rad, Xk, Pk),
+    Angle_Corr = Angle + Ka * Acc_Estim,
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% MEASURED DIRECT ANGLE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     Direct_angle = math:atan(Az / (-Ax)) * ?RAD_TO_DEG,
@@ -121,7 +126,8 @@ robot_loop(State) ->
         old_kalman_state => {Old_X1, Old_P1},
         move_speed => {Adv_V_Ref_New, Turn_V_Ref_New},
         frequency => {N_New, Freq_New, Mean_Freq_New, T_End_New},
-        acc_prev => Acc
+        acc_prev => Acc,
+        prev_speed => Speed 
     },
 
     robot_loop(NewState).
