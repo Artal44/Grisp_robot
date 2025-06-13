@@ -13,7 +13,7 @@
 
 -define(width, 0.185). % Width of the robot (m)
 -define(height, 0.95). % Height of the robot (m)
--define(I, 0.1 + ?M * (math:pow(?width, 2) + math:pow(?height, 2)) / 12). % I = M * (w² + h²) / 12 (rectangular parallelepiped)
+-define(I, ?M * (math:pow(?width, 2) + math:pow(?height, 2)) / 12). % I = M * (w² + h²) / 12 (rectangular parallelepiped)
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% INITIALISATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -39,7 +39,7 @@ robot_init() ->
 
     % PIDs initialization with adjusted gains
     %Pid_Speed = spawn(pid_controller, pid_init, [-0.085, -0.009, 0.0, -1, 50.0, 0.0]), 
-    Pid_Speed = spawn(pid_controller, pid_init, [-0.065, -0.03, 0.0, -1, 60.0, 0.0]), 
+    Pid_Speed = spawn(pid_controller, pid_init, [-0.065, -0.009, 0.0, -1, 60.0, 0.0]), 
     Pid_Stability = spawn(pid_controller, pid_init, [19.6, 0.0, 5.8, -1, -1, 0.0]), 
     persistent_term:put(controllers, {Pid_Speed, Pid_Stability}),
     persistent_term:put(freq_goal, 300.0),
@@ -53,7 +53,7 @@ robot_init() ->
         old_kalman_state => {Old_X0, Old_P0}, %{Old_Xk, Old_Pk}
         move_speed => {0.0, 0.0}, % {Adv_V_Ref, Turn_V_Ref}
         frequency => {0, 0, 200.0, T0}, %{N, Freq, Mean_Freq, T_End}
-	      acc_prev => 0.0,
+	    acc_prev => 0.0,
         prev_speed => 0.0
     }, 
 
@@ -63,7 +63,7 @@ robot_loop(State) ->
     % Set LEDs 1 and 2 to blue to indicate main loop running
     [grisp_led:color(L, aqua) || L <- [1, 2]],
 
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% PARSE STATE MAP %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%    
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% PARSE STATE MAP %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {Robot_State, Robot_Up} = maps:get(robot_state, State),
     {Tk, Xk, Pk} = maps:get(kalman_state, State),
     {Old_Xk, Old_Pk} = maps:get(old_kalman_state, State),
@@ -82,30 +82,6 @@ robot_loop(State) ->
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% GET INPUT FROM I2CBus %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {Speed, CtrlByte} = i2c_read(),
     [Arm_Ready, _, _, Get_Up, Forward, Backward, Left, Right] = hera_com:get_bits(CtrlByte),
-    Prev_Speed = maps:get(prev_speed,State),
-    Acc_Estim = (Speed - Prev_Speed)/ Dt,
-    Ka = 0.1, %valeur de correction a modif ( = h/g)
-
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% GET SONAR MEASUREMENTS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    % Determine which sonar to read based on forward/backward flags and current sonar
-    Sonar_To_Read = case {Forward, Backward} of
-        {true, false} -> Next_sonar;
-        {false, true} -> robot_main;
-        _ -> Next_sonar
-    end,
-    hera_com:send_unicast(Sonar_To_Read, "authorized", "UTF8"),
-    Next_NewSonar = case {Forward, Backward} of
-        {true, false} ->
-            case Next_sonar of
-                robot_front_left -> robot_front_right;
-                robot_front_right -> robot_front_left;
-                _ -> robot_front_left
-            end;
-        _ ->
-            Next_sonar
-    end,
-    % Retrieve the sonar distance
-    [{_, _, _, [Distance]}] = hera_data:get(distance, Sonar_To_Read),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% DERIVE CONTROLS FROM INPUTS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     Adv_V_Goal = speed_ref(Forward, Backward),
@@ -114,9 +90,14 @@ robot_loop(State) ->
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN COMPUTATIONS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     Acc_Prev_Rad = Acc_Prev * math:pi() / 180.0, % Acc_Prev is in cm/s**2 in what should we change it to?
     [Angle, {X1, P1}] = kalman_angle(Dt, Ax, Az, Gy, Acc_Prev_Rad, Xk, Pk),
+
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% ANGLE CORRECTION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    Prev_Speed = maps:get(prev_speed,State),
+    Acc_Estim = (Speed - Prev_Speed)/ Dt,
+    Ka = 0.1, %valeur de correction a modif ( = h/g)
     Angle_Corr = Angle + Ka * Acc_Estim,
 
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% MEASURED DIRECT ANGLE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%% MEASURED DIRECT ANGLE & OLD KALMAN %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     Direct_angle = math:atan(Az / (-Ax)) * ?RAD_TO_DEG,
     [Old_Angle, {Old_X1, Old_P1}] = old_kalman_angle(Dt, Ax, Az, Gy, Old_Xk, Old_Pk),
     log_buffer:add({main_loop, erlang:system_time(millisecond), kalman_comparison, [Angle, Old_Angle, Direct_angle]}),
@@ -136,7 +117,8 @@ robot_loop(State) ->
     {N_New, Freq_New, Mean_Freq_New} = frequency_computation(Dt, N, Freq, Mean_Freq),
     smooth_frequency(T_End, T1),
 
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% STATE UPDATE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% STATE UPDATE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     T_End_New = erlang:system_time()/1.0e6,
     NewState = State#{
         robot_state => {Next_Robot_State, Robot_Up_New},
@@ -214,6 +196,7 @@ kalman_angle(Dt, Ax, Az, Gy, U, X0, P0) ->
                     W1 = W + ((G / Hh) * math:sin(Th) - (U1 / Hh) * math:cos(Th)) * Dt,
                     mat:matrix([[Th1], [W1]]);
                 _ ->
+                    io:format("[ROBOT][KALMAN ERROR] Unexpected state vector: ~p~n", [Arr]),
                     error({unexpected_state_vector, Arr})
         end
     end,
@@ -251,6 +234,7 @@ kalman_angle(Dt, Ax, Az, Gy, U, X0, P0) ->
             Angle = Wrap_Th_Kalman * ?RAD_TO_DEG,
             [Angle, {X1, P1}];
         _ ->
+            io:format("[ROBOT][KALMAN ERROR] Unexpected Kalman result: ~p~n", [KalmanArr]),
             error({unexpected_kalman_result, KalmanArr})
     end.
 
@@ -377,7 +361,7 @@ i2c_read() ->
     %Receive I2C and conversion
     I2Cbus = persistent_term:get(i2c),
     case grisp_i2c:transfer(I2Cbus, [{read, 16#40, 1, 5}]) of
-        {[<<SL1,SL2,SR1,SR2,CtrlByte>>]} ->
+        [<<SL1,SL2,SR1,SR2,CtrlByte>>] ->
             [Speed_L,Speed_R] = hera_com:decode_half_float([<<SL1, SL2>>, <<SR1, SR2>>]),
             Speed = (Speed_L + Speed_R)/2,
             {Speed, CtrlByte};

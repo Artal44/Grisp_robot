@@ -15,7 +15,7 @@ start(_Type, _Args) ->
     [grisp_led:flash(L, yellow, 500) || L <- [1, 2]],
 
     % Log buffer initialization
-    log_buffer:init(5000),
+    log_buffer:init(10000),
     log_buffer:add({balancing_robot, erlang:system_time(millisecond), startup}),
 
     _ = grisp:add_device(spi2, pmod_nav),
@@ -35,6 +35,7 @@ start(_Type, _Args) ->
         2 ->
             log_buffer:add({balancing_robot, erlang:system_time(millisecond), right_sonar});
         _ ->
+            io:format("[BALANCING_ROBOT][ERROR] Unknown GRiSP ID: ~p~n", [Id]),
             log_buffer:add({balancing_robot, erlang:system_time(millisecond), unknown_id})
     end,
 
