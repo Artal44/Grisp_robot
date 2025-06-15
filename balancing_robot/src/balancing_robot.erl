@@ -22,14 +22,17 @@ start(_Type, _Args) ->
     pmod_nav:config(acc, #{odr_g => {hz,238}}),
 
     _ = grisp:add_device(uart, pmod_maxsonar),
-    numerl:init(),
+    numerl:init(),  
     timer:sleep(2000),
+
+    hera_subscribe:subscribe(self()),
 
     {ok, Id} = get_grisp_id(),
     case Id of
         0 ->
-            log_buffer:add({balancing_robot, erlang:system_time(millisecond), main_robot}),
-            spawn(main_loop, robot_init, []);
+            log_buffer:add({balancing_robot, erlang:system_time(millisecond), robot_main}),
+            Pid = spawn(main_loop, robot_init, []),
+            hera:start_measure(nav_measure, [Pid, robot_main]);
         1 ->
             log_buffer:add({balancing_robot, erlang:system_time(millisecond), left_sonar});
         2 ->
