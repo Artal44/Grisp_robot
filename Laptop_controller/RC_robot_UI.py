@@ -4,7 +4,6 @@ import sys
 import numpy as np
 import serial
 from Server import Server
-import time
 
 class User_interface:
 
