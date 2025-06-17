@@ -19,9 +19,9 @@
 #define v_max  100 // speed max, in cm/s
 #define microsteps 4
 #define steps 400
-#define diameter 7 // cm
+#define diameter 10 // cm
 #define lever_ratio 0.09090909090909090909090909090909 //    12/132
-#define lenght_btw_wheels 18.5 // cm
+#define lenght_btw_wheels 25 // cm
 
 
 
