@@ -39,7 +39,7 @@ robot_init() ->
     log_buffer:add({main_loop, erlang:system_time(millisecond), robot_ready}),
 
     State = #{
-        robot_state => {rest, false}, %{Robot_State, Robot_Up}
+        robot_state => {rest, true}, %{Robot_State, Robot_Up}
         kalman_state => {T0, X0, P0}, %{Tk, Xk, Pk}
         old_kalman_state => {Old_X0, Old_P0}, %{Old_Xk, Old_Pk}
         move_speed => {0.0, 0.0}, % {Adv_V_Ref, Turn_V_Ref}
@@ -115,7 +115,6 @@ robot_loop(State) ->
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% DETERMINE NEW ROBOT STATE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {Robot_State, Robot_Up} = maps:get(robot_state, State),
-    Robot_Up_New = is_robot_up(Angle, Robot_Up),
     Next_Robot_State = get_robot_state({Robot_State, Robot_Up, Get_Up, Arm_Ready, Angle}),
     Output_Byte = get_output_state(Next_Robot_State, Angle),
 
@@ -129,7 +128,7 @@ robot_loop(State) ->
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% STATE UPDATE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     T_End_New = erlang:system_time()/1.0e6,
     NewState = State#{
-        robot_state => {Next_Robot_State, Robot_Up_New},
+        robot_state => {Next_Robot_State, true},
         old_kalman_state => {Old_X1, Old_P1},
         kalman_state => {T1, X1, P1},
         move_speed => {Adv_V_Ref_New, Turn_V_Ref_New},
@@ -153,63 +152,27 @@ calibrate() ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% ROBOT STATE LOGIC %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-get_robot_state(Robot_State) -> % {Robot_state, Robot_Up, Get_Up, Arm_ready, Angle}
+get_robot_state(Robot_State) -> % {Robot_state, Robot_Up, Get_Up, Arm_ready, Angle} = {Robot_state, stabilité, Get_statique, Arm_ready, Angle}
     case Robot_State of
-        {rest, _, true, _, _} -> raising;
+        {rest, true, _, _, _} -> dynamic;
         {rest, _, _, _, _} -> rest;
-        {raising, true, _, _, _} -> stand_up;
-        {raising, _, false, _, _} -> soft_fall;
-        {raising, _, _, _, _} -> raising;
-        {stand_up, _, false, _, _} -> wait_for_extend;
-        {stand_up, false, _, _, _} -> rest;
-        {stand_up, _, _, _, _} -> stand_up;
-        {wait_for_extend, _, _, _, _} -> prepare_arms;
-        {prepare_arms, _, _, true, _} -> free_fall;
-        {prepare_arms, _, true, _, _} -> stand_up;
-        {prepare_arms, false, _, _, _} -> rest;
-        {prepare_arms, _, _, _, _} -> prepare_arms;
-        {free_fall, _, _, _, Angle} ->
-            case abs(Angle) >10 of
-                true -> wait_for_retract;
-                _ ->free_fall
-            end;
-        {wait_for_retract, _, _, _, _} -> soft_fall;
-        {soft_fall, _, _, true, _} -> rest;
-        {soft_fall, _, true, _, _} -> raising;
-        {soft_fall, _, _, _, _} -> soft_fall
+        {dynamic, _, true, _, _} -> static;
+        {dynamic, false, _, _, _} -> rest;
+        {dynamic, _, _, _, _} -> dynamic;
+        {static, _, false, _, _} -> dynamic;
+        {static, false, _, _, _} -> rest;
+        {static, _, _, _, _} -> static
     end.
 
 get_output_state(State, Angle) ->
     Move_direction = get_movement_direction(Angle),    
     % Output bits = [Power, Freeze, Extend, Robot_Up_Bit, Move_direction, 0, 0, 0]
     case State of 
-        rest -> 
-            get_byte([0, 0, 0, 0, Move_direction, 0, 0, 0]);
-        raising -> 
-            get_byte([1, 0, 1, 0, Move_direction, 0, 0, 0]);
-        stand_up -> 
-            get_byte([1, 0, 0, 1, Move_direction, 0, 0, 0]);
-        wait_for_extend -> 
-            get_byte([1, 0, 1, 1, Move_direction, 0, 0, 0]);
-        prepare_arms -> 
-            get_byte([1, 0, 1, 1, Move_direction, 0, 0, 0]);
-        free_fall -> 
-            get_byte([1, 1, 1, 1, Move_direction, 0, 0, 0]);
-        wait_for_retract -> 
-            get_byte([1, 0, 0, 0, Move_direction, 0, 0, 0]);
-        soft_fall -> 
-            get_byte([1, 0, 0, 0, Move_direction, 0, 0, 0])
+        rest      -> get_byte([0, 0, 0, 0, Move_direction, 0, 0, 0]);
+        dynamic   -> get_byte([1, 0, 0, 1, Move_direction, 0, 0, 0]);
+        static    -> get_byte([1, 0, 1, 1, Move_direction, 0, 0, 0])
     end.
 
-is_robot_up(Angle, Robot_Up) ->
-    if 
-        Robot_Up and (abs(Angle) > 40) ->
-            false;
-        not Robot_Up and (abs(Angle) < 38) -> 
-            true;
-        true ->
-            Robot_Up
-    end.
 
 get_movement_direction(Angle) ->
     if

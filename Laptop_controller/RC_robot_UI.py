@@ -45,7 +45,7 @@ class User_interface:
     # Robot state
     message = 0  #Message to send to the robot
     run = True 
-    stand = False
+    stand = True
     kalman = True
     release_space = True
     release_enter = True
