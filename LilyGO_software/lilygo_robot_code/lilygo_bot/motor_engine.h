@@ -5,8 +5,6 @@
 
 #define sgn(x) ((x) < 0 ? -1 : ((x) > 0 ? 1 : 0))
 
-
-
 #define MOTOR_AC_EN_PIN 14
 #define MOTOR_A_STEP_PIN 12
 #define MOTOR_A_DIR_PIN 13
@@ -19,11 +17,9 @@
 #define v_max  100 // speed max, in cm/s
 #define microsteps 4
 #define steps 400
-#define diameter 7 // cm
+#define diameter 10 // cm
 #define lever_ratio 0.09090909090909090909090909090909 //    12/132
-#define lenght_btw_wheels 18.5 // cm
-
-
+#define lenght_btw_wheels 24 // cm
 
 void engine_init();
 
