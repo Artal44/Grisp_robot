@@ -135,7 +135,7 @@ void GRiSP_receiver(int howMany) {
     } else {
       ext_end = stand(0,30.0);
     }
-
+  }
 
   // Empty the stack
   while(Wire.available()){
