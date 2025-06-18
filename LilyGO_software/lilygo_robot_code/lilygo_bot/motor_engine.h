@@ -51,7 +51,5 @@ void emergency(bool);
 
 bool stand(float,float);
 
-void raise_dir(int);
-
 bool is_ready();
 
