@@ -16,6 +16,7 @@ start(_Type, _Args) ->
 
     % Log buffer initialization
     log_buffer:init(10000),
+
     log_buffer:add({balancing_robot, erlang:system_time(millisecond), startup}),
 
     _ = grisp:add_device(spi2, pmod_nav),
@@ -26,13 +27,14 @@ start(_Type, _Args) ->
     timer:sleep(2000),
 
     hera_subscribe:subscribe(self()),
-
+    
     {ok, Id} = get_grisp_id(),
     case Id of
         0 ->
             log_buffer:add({balancing_robot, erlang:system_time(millisecond), robot_main}),
             Pid = spawn(main_loop, robot_init, []),
-            hera:start_measure(nav_measure, [Pid, robot_main]);
+            hera:start_measure(nav_measure, [Pid, robot_main]),
+            hera:start_measure(sonar_measure, [Pid, robot_main]);
         1 ->
             log_buffer:add({balancing_robot, erlang:system_time(millisecond), left_sonar});
         2 ->

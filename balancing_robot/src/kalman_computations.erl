@@ -6,9 +6,9 @@
 -define(DEG_TO_RAD, math:pi()/180.0).
 
 -define(g, 9.81). % Gravity in m/s²
--define(M, 3.4). % Mass of the robot (kg)
--define(h, 0.26). % Height of the robot center of mass (m)
-
+-define(M, 5). % Mass of the robot (kg)
+-define(h, 0.41). % Height of the robot center of mass (m)
+% Poid en haut -> un metre de g
 -define(width, 0.185). % Width of the robot (m)
 -define(height, 0.95). % Height of the robot (m)
 -define(I, ?M * (math:pow(?width, 2) + math:pow(?height, 2)) / 12). % I = M * (w² + h²) / 12 (rectangular parallelepiped)
@@ -39,8 +39,8 @@ calibrate_initial_state() ->
 
 init_kalman() ->
     % Adjusted Kalman constants
-    R = mat:matrix([[3.0, 0.0], [0, 2.0e-6]]),
-    Q = mat:matrix([[8.0e-5, 0.0], [0.0, 14.0]]),
+    R = mat:matrix([[3.0, 0.0], [0, 3.0e-6]]),
+    Q = mat:matrix([[1.0e-6, 0.0], [0.0, 2.5]]),
 
     % Model constants
     G = ?g,

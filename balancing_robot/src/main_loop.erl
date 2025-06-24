@@ -4,8 +4,9 @@
 
 -define(RAD_TO_DEG, 180.0/math:pi()).
 
--define(ADV_V_MAX, 30.0).
+-define(ADV_V_MAX, 20.0).
 -define(TURN_V_MAX, 80.0).
+-define(KALMAN_BIAS_OFFSET, 0.6). % degrees
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% INITIALISATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -29,23 +30,23 @@ robot_init() ->
     persistent_term:put(i2c, I2Cbus),
 
     % PIDs initialization with adjusted gains
-    %Pid_Speed = spawn(pid_controller, pid_init, [-0.085, -0.009, 0.0, -1, 50.0, 0.0]), 
-    Pid_Speed = spawn(pid_controller, pid_init, [-0.065, -0.009, 0.0, -1, 60.0, 0.0]), 
-    Pid_Stability = spawn(pid_controller, pid_init, [19.6, 0.0, 5.8, -1, -1, 0.0]), 
+    % Pid_Speed = spawn(pid_controller, pid_init, [-0.12, -0.07, 0.0, -1, 60.0, 0.0]),
+    % Pid_Stability = spawn(pid_controller, pid_init, [17.0, 0.0, 4.0, -1, -1, 0.0]),
+    Pid_Speed = spawn(pid_controller, pid_init, [-0.06, -0.005, 0.0, -1, 60.0, 0.0]), 
+    Pid_Stability = spawn(pid_controller, pid_init, [16.5, 0.0, 9.2, -1, -1, 0.0]), 
     persistent_term:put(controllers, {Pid_Speed, Pid_Stability}),
-    persistent_term:put(freq_goal, 300.0),
+    persistent_term:put(freq_goal, 250.0),
 
     T0 = erlang:system_time()/1.0e6,
     log_buffer:add({main_loop, erlang:system_time(millisecond), robot_ready}),
 
     State = #{
-        robot_state => {rest, false}, %{Robot_State, Robot_Up}
-        kalman_state => {T0, X0, P0}, %{Tk, Xk, Pk}
-        old_kalman_state => {Old_X0, Old_P0}, %{Old_Xk, Old_Pk}
+        robot_state => {rest, false}, % {Robot_State, Robot_Up}
+        kalman_state => {T0, X0, P0}, % {Tk, Xk, Pk}
+        old_kalman_state => {Old_X0, Old_P0}, % {Old_Xk, Old_Pk}
         move_speed => {0.0, 0.0}, % {Adv_V_Ref, Turn_V_Ref}
-        frequency => {0, 0, 200.0, T0}, %{N, Freq, Mean_Freq, T_End}
-	    acc_prev => 0.0,
-        prev_speed => 0.0
+        frequency => {0, 0, 200.0, T0}, % {N, Freq, Mean_Freq, T_End}
+	    acc_prev => 0.0
     }, 
 
     robot_loop(State).
@@ -53,8 +54,8 @@ robot_init() ->
 robot_loop(State) ->
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% LOGGING %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     [grisp_led:color(L, aqua) || L <- [1, 2]],
-    {N, Freq, Mean_Freq, _T_End} = maps:get(frequency, State), 
-    case N rem 20 of 0 ->
+    {N, Freq, Mean_Freq, T_End} = maps:get(frequency, State), 
+    case N rem 50 of 0 ->
         log_buffer:add({main_loop, erlang:system_time(millisecond), robot_frequency, [Freq, N, Mean_Freq]});
     _ -> ok
     end,
@@ -75,19 +76,37 @@ robot_loop(State) ->
 
     {Angle, X1, P1, Old_X1, Old_P1} =
     receive 
-        {nav_data, [Gy, Ax, Az]} ->
-            %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN PREDICTION + CORRECTION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-            [Angle1, {X1a, P1a}] = kalman_computations:kalman_angle(Dt, Ax, Az, Gy, Acc_SI, Xk, Pk),
+        {nav_data, [Gy_raw, Ax_raw, Az_raw]} ->
+            case valid_nav_data({Gy_raw, Ax_raw, Az_raw}) of
+                true ->
+                    Gy = Gy_raw,
+                    Ax = Ax_raw,
+                    Az = Az_raw,
+                    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN PREDICTION + CORRECTION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                    [Angle1, {X1a, P1a}] = kalman_computations:kalman_angle(Dt, Ax, Az, Gy, Acc_SI, Xk, Pk),
 
-            %%%%%%%%%%%%%%%%%%%%%%%%%%%%% MEASURED DIRECT ANGLE & OLD KALMAN %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-            Direct_angle = math:atan(Az / (-Ax)) * ?RAD_TO_DEG,
-            {Old_Xk, Old_Pk} = maps:get(old_kalman_state, State),
-            [Old_Angle, {Old_X1a, Old_P1a}] = kalman_computations:old_kalman_angle(Dt, Ax, Az, Gy, Old_Xk, Old_Pk),
-            case N rem 20 of 0 ->
-                log_buffer:add({main_loop, erlang:system_time(millisecond), kalman_comparison, [Angle1, Old_Angle, Direct_angle]});
-            _ -> ok
-            end,
-            {Angle1, X1a, P1a, Old_X1a, Old_P1a}
+                    %%%%%%%%%%%%%%%%%%%%%%%%%%%%% MEASURED DIRECT ANGLE & OLD KALMAN %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                    Direct_angle = math:atan(Az / (-Ax)) * ?RAD_TO_DEG,
+                    {Old_Xk, Old_Pk} = maps:get(old_kalman_state, State),
+                    [Old_Angle, {Old_X1a, Old_P1a}] = kalman_computations:old_kalman_angle(Dt, Ax, Az, Gy, Old_Xk, Old_Pk),
+                    case N rem 50 of 0 ->
+                        log_buffer:add({main_loop, erlang:system_time(millisecond), kalman_comparison, [Angle1 - ?KALMAN_BIAS_OFFSET, Old_Angle - ?KALMAN_BIAS_OFFSET, Direct_angle - ?KALMAN_BIAS_OFFSET]});
+                    _ -> ok
+                    end,
+                    {Angle1, X1a, P1a, Old_X1a, Old_P1a};
+                %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% BAD NAV DATA %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                false ->
+                    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN PREDICTION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                    {X1a, P1a} = kalman_computations:kalman_predict_only(Dt, [Xk, Pk]),
+                    [Th, _] = mat:to_array(X1a),
+                    {Old_Xk, Old_Pk} = maps:get(old_kalman_state, State),
+                    [OldTh, _] = mat:to_array(Old_Xk),
+                    case N rem 50 of 0 ->
+                        log_buffer:add({main_loop, erlang:system_time(millisecond), kalman_comparison_predict_only, [Th * ?RAD_TO_DEG - ?KALMAN_BIAS_OFFSET, OldTh * ?RAD_TO_DEG - ?KALMAN_BIAS_OFFSET]});
+                    _ -> ok
+                    end,
+                    {Th * ?RAD_TO_DEG, X1a, P1a, Old_Xk, Old_Pk}
+        end
     after 0 ->
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN PREDICTION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         {X1a, P1a} = kalman_computations:kalman_predict_only(Dt, [Xk, Pk], Acc_SI),
@@ -96,35 +115,74 @@ robot_loop(State) ->
         [Th, _] = mat:to_array(X1a),
         {Old_Xk, Old_Pk} = maps:get(old_kalman_state, State),
         [OldTh, _] = mat:to_array(Old_Xk),
-        case N rem 20 of 0 ->
-                log_buffer:add({main_loop, erlang:system_time(millisecond), kalman_comparison_predict_only, [Th * ?RAD_TO_DEG, OldTh * ?RAD_TO_DEG]});
+        case N rem 50 of 0 ->
+            log_buffer:add({main_loop, erlang:system_time(millisecond), kalman_comparison_predict_only, [Th * ?RAD_TO_DEG - ?KALMAN_BIAS_OFFSET, OldTh * ?RAD_TO_DEG - ?KALMAN_BIAS_OFFSET]});
         _ -> ok
         end,
         
         {Th * ?RAD_TO_DEG, X1a, P1a, Old_Xk, Old_Pk}
     end,
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% ANGLE CORRECTION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    % Apply a bias offset to the angle to correct for the robot's physical characteristics
+    Angle_Corrected = Angle - ?KALMAN_BIAS_OFFSET,
 
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% COMPUTE ANGLE CORRECTION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    % Acc_Estim = (Speed - maps:get(prev_speed, State)) / Dt,
-    % Ka = 0.1,
-    % Angle_Corr = math:atan(Az / (-Ax)) * ?RAD_TO_DEG + Ka * Acc_Estim,
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SONAR MEASURE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    Sonar_Data =
+    receive
+        {sonar_data, robot_main, [D]} ->
+            % Convert distance from cm to m
+            D_M = D / 100.0,
+            case N rem 50 of 0 ->
+                log_buffer:add({main_loop, erlang:system_time(millisecond), sonar_measure, [robot_main, D_M]});
+            _ -> ok
+            end,    
+            D_M;
+        {sonar_data, robot_front_left, [D]} ->
+            % Convert distance from cm to m
+            D_M = D / 100.0,
+            case N rem 50 of 0 ->
+                log_buffer:add({main_loop, erlang:system_time(millisecond), sonar_measure, [robot_front_left, D_M]});
+            _ -> ok
+            end,
+            D_M;
+        {sonar_data, robot_front_rigth, [D]} ->
+            % Convert distance from cm to m
+            D_M = D / 100.0,
+            case N rem 50 of 0 ->
+                log_buffer:add({main_loop, erlang:system_time(millisecond), sonar_measure, [robot_front_rigth, D_M]});
+            _ -> ok
+            end,
+            D_M
+    after 0 ->
+        % If no sonar data received, use a default value (e.g., 0.0)
+        0.0
+    end,
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SET NEW ENGINES COMMANDS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {Adv_V_Ref, Turn_V_Ref} = maps:get(move_speed, State),
-    {Acc, Adv_V_Ref_New, Turn_V_Ref_New} = stability_engine:controller({Dt, Angle, Speed}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal, Turn_V_Ref}),
+    {Acc, Adv_V_Ref_New, Turn_V_Ref_New} = stability_engine:controller({Dt, Angle_Corrected, Speed, Sonar_Data}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal, Turn_V_Ref}, N),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% DETERMINE NEW ROBOT STATE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {Robot_State, Robot_Up} = maps:get(robot_state, State),
-    Robot_Up_New = is_robot_up(Angle, Robot_Up),
-    Next_Robot_State = get_robot_state({Robot_State, Robot_Up, Get_Up, Arm_Ready, Angle}),
-    Output_Byte = get_output_state(Next_Robot_State, Angle),
+    Robot_Up_New = is_robot_up(Angle_Corrected, Robot_Up),
+    Next_Robot_State = get_robot_state({Robot_State, Robot_Up, Get_Up, Arm_Ready, Angle_Corrected}),
+    Output_Byte = get_output_state(Next_Robot_State, Angle_Corrected),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SEND CONTROLS TO I2CBus %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     i2c_write(Acc, Turn_V_Ref_New, Output_Byte),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% FREQUENCY STABILISATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {N_New, Freq_New, Mean_Freq_New} = frequency_computation(Dt, N, Freq, Mean_Freq),
-    % smooth_frequency(T_End, T1),
+    %   Imposed maximum frequency
+    T2 = erlang:system_time()/1.0e6,
+    Freq_Goal = persistent_term:get(freq_goal),
+    Delay_Goal = 1.0/Freq_Goal * 1000.0,
+    if
+        T2-T_End < Delay_Goal ->
+            wait(Delay_Goal-(T2-T1));
+        true ->
+            ok
+    end,
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% STATE UPDATE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     T_End_New = erlang:system_time()/1.0e6,
@@ -134,21 +192,31 @@ robot_loop(State) ->
         kalman_state => {T1, X1, P1},
         move_speed => {Adv_V_Ref_New, Turn_V_Ref_New},
         frequency => {N_New, Freq_New, Mean_Freq_New, T_End_New},
-        acc_prev => Acc,
-        prev_speed => Speed 
+        acc_prev => Acc
     },
     robot_loop(NewState).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% CONFIG FUNCTIONS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
 calibrate() ->
     N = 500,
     Y_List = [pmod_nav:read(acc, [out_y_g]) || _ <- lists:seq(1, N)],
     Gy0 = lists:sum([Y || [Y] <- Y_List]) / N,
     persistent_term:put(gy0, Gy0).
 
+valid_nav_data({Gy, Ax, Az}) ->
+    Gy >= -250.0 andalso Gy =< 250.0 andalso
+    Ax >= -12.0 andalso Ax =< 12.0 andalso
+    Az >= -12.0 andalso Az =< 12.0.
+
+wait(T) -> 
+	Tnow = erlang:system_time()/1.0e6,
+	wait_help(Tnow,Tnow+T).
+wait_help(Tnow, Tend) when Tnow >= Tend -> ok;
+wait_help(_, Tend) -> 
+    Tnow = erlang:system_time()/1.0e6,
+    wait_help(Tnow,Tend).
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% ROBOT STATE LOGIC %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
