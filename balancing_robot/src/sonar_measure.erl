@@ -13,8 +13,6 @@ init([Pid, Role]) ->
         timeout => 100
     }}.
 
-
-
 measure(State) ->
     receive
         {hera_com, "ping"} ->

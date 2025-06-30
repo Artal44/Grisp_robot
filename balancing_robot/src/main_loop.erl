@@ -32,8 +32,9 @@ robot_init() ->
     % PIDs initialization with adjusted gains
     % Pid_Speed = spawn(pid_controller, pid_init, [-0.12, -0.07, 0.0, -1, 60.0, 0.0]),
     % Pid_Stability = spawn(pid_controller, pid_init, [17.0, 0.0, 4.0, -1, -1, 0.0]),
-    Pid_Speed = spawn(pid_controller, pid_init, [-0.06, -0.005, 0.0, -1, 60.0, 0.0]), 
-    Pid_Stability = spawn(pid_controller, pid_init, [16.5, 0.0, 9.2, -1, -1, 0.0]), 
+
+    Pid_Speed = spawn(pid_controller, pid_init, [-0.071, -0.053, 0.0, -1, 15.0, 0.0]), 
+    Pid_Stability = spawn(pid_controller, pid_init, [16.3, 0.0, 9.4, -1, -1, 0.0]), 
     persistent_term:put(controllers, {Pid_Speed, Pid_Stability}),
     persistent_term:put(freq_goal, 250.0),
 
@@ -361,10 +362,3 @@ frequency_computation(Dt, N, Freq, Mean_Freq) ->
     end,
     {N_New, Freq_New, Mean_Freq_New}.
     
-smooth_frequency(T_End, T1) ->
-    Freq_Goal = persistent_term:get(freq_goal),
-    Delay_Goal = 1000.0 / Freq_Goal,
-    Remaining = Delay_Goal - (T1 - T_End),
-    SleepTime = trunc(max(Remaining, 0)),
-    if SleepTime > 0 -> timer:sleep(SleepTime); true -> ok end.
-
