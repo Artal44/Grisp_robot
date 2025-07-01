@@ -42,7 +42,7 @@ class User_interface:
         
         self.screen = pygame.display.set_mode((self.WIDTH, self.HEIGHT), pygame.RESIZABLE)
         pygame.display.set_caption("Robot Controller")
-²
+
         self.manager = pygame_gui.UIManager((self.WIDTH, self.HEIGHT))
         self.clock = pygame.time.Clock()
         self.clock.tick(200)
