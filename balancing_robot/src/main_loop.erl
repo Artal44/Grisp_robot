@@ -167,7 +167,7 @@ robot_loop(State) ->
     {Robot_State, Robot_Up} = maps:get(robot_state, State),
     Robot_Up_New = is_robot_up(Angle_Corrected, Robot_Up),
     Next_Robot_State = get_robot_state({Robot_State, Robot_Up, Get_Up, Arm_Ready, Angle_Corrected}),
-    Output_Byte = get_output_state(Next_Robot_State, Angle_Corrected),
+    Output_Byte = get_output_state(Next_Robot_State),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SEND CONTROLS TO I2CBus %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     i2c_write(Acc, Turn_V_Ref_New, Output_Byte),
@@ -235,23 +235,16 @@ get_robot_state(Robot_State) -> % {Robot_state, Robot_Up, Get_Up, Arm_ready, Ang
         {static, _, _, _, _} -> static
     end.
 
-get_output_state(State, Angle) ->
-    Move_direction = get_movement_direction(Angle),    
+get_output_state(State) ->   
     % Output bits = [Power, Freeze, Extend, Robot_Up_Bit, Move_direction, 0, 0, 0]
     case State of 
-        rest      -> get_byte([0, 0, 0, 0, Move_direction, 0, 0, 0]);
-        dynamic   -> get_byte([1, 0, 0, 1, Move_direction, 0, 0, 0]);
-        static    -> get_byte([1, 0, 1, 1, Move_direction, 0, 0, 0])
+        rest      -> get_byte([0, 0, 0, 0, 0, 0, 0, 0]);
+        dynamic   -> get_byte([1, 0, 0, 1, 0, 0, 0, 0]);
+        static    -> get_byte([1, 0, 1, 1, 0, 0, 0, 0])
     end.
 
 
-get_movement_direction(Angle) ->
-    if
-        Angle > 0.0 ->
-            1;
-        true ->
-            0
-    end.
+
 
 get_byte(List) ->
     [A, B, C, D, E, F, G, H] = List,
