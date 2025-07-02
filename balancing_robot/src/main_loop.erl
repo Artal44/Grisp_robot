@@ -188,7 +188,7 @@ robot_loop(State) ->
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% STATE UPDATE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     T_End_New = erlang:system_time()/1.0e6,
     NewState = State#{
-        robot_state => {Next_Robot_State, Robot_Up_New},
+        robot_state => {Next_Robot_State, true},
         old_kalman_state => {Old_X1, Old_P1},
         kalman_state => {T1, X1, P1},
         move_speed => {Adv_V_Ref_New, Turn_V_Ref_New},

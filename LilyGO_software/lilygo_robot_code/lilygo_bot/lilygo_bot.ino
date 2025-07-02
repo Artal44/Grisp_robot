@@ -131,7 +131,7 @@ void GRiSP_receiver(int howMany) {
 
     // extension/retraction of the rising system
     if(bitRead(GRiSP_flags, 5)){
-      ext_end = stand(-29,30.0);
+      ext_end = stand(-35,30.0);
     } else {
       ext_end = stand(0,30.0);
     }
