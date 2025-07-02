@@ -123,7 +123,7 @@ void GRiSP_receiver(int howMany) {
       set_acceleration(I2C_command[0], I2C_command[0]);
     }
 
-    // Free fall, null wheel speed
+    // freeze
     if(bitRead(GRiSP_flags, 6)){ 
       set_acceleration(0, 0);
       set_speed(0, 0);
