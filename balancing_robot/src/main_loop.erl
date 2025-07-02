@@ -188,7 +188,7 @@ robot_loop(State) ->
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% STATE UPDATE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     T_End_New = erlang:system_time()/1.0e6,
     NewState = State#{
-        robot_state => {Next_Robot_State, true},
+        robot_state => {Next_Robot_State, Robot_Up_New},
         old_kalman_state => {Old_X1, Old_P1},
         kalman_state => {T1, X1, P1},
         move_speed => {Adv_V_Ref_New, Turn_V_Ref_New},
@@ -243,7 +243,15 @@ get_output_state(State) ->
         static    -> get_byte([1, 0, 1, 1, 0, 0, 0, 0])
     end.
 
-
+is_robot_up(Angle, Robot_Up) ->
+    if 
+        Robot_Up and (abs(Angle) > 80) ->
+            false;
+        not Robot_Up and (abs(Angle) < 78) -> 
+            true;
+        true ->
+            Robot_Up
+    end.
 
 
 get_byte(List) ->
