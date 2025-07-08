@@ -239,7 +239,7 @@ get_output_state(State) ->
     case State of 
         rest      -> get_byte([0, 0, 0, 0, 0, 0, 0, 0]);
         dynamic   -> get_byte([1, 0, 0, 1, 0, 0, 0, 0]);
-        static    -> get_byte([1, 0, 1, 1, 0, 0, 0, 0])
+        static    -> get_byte([1, 1, 1, 1, 0, 0, 0, 0])
     end.
 
 is_robot_up(Angle, Robot_Up) ->
