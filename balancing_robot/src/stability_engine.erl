@@ -8,9 +8,27 @@
 -define(TURN_V_MAX, 80.0).
 -define(TURN_ACCEL, 400.0).
 
-controller({Dt, Angle, Speed, Sonar_Data}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal, Turn_V_Ref}, N) ->
+-define(MIN_SONAR_DIST, 0.10).   
+-define(MAX_SONAR_DIST, 0.50).  
+-define(MAX_DECEL, 8.0).         
+
+controller({Dt, Angle, Speed, Sonar_Data}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal, Turn_V_Ref}, DoLog) ->
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% CONTROLLER %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {Pid_Speed, Pid_Stability} = persistent_term:get(controllers),
+
+    % Applique un freinage si l’obstacle est détecté
+    % Adv_V_Goal_Safe =
+    %     case Sonar_Data > 0.0 of
+    %         true -> brake_profile(Sonar_Data, Adv_V_Goal, Dt);
+    %         false -> Adv_V_Goal
+    %     end,
+
+    % % Évitement automatique si bloqué
+    % Turn_V_Goal_Avoid =
+    %     case Sonar_Data =< ?MIN_SONAR_DIST andalso Adv_V_Goal > 0.0 of
+    %         true -> ?TURN_V_MAX;  % tourne à droite (ou -?TURN_V_MAX à gauche)
+    %         false -> Turn_V_Goal
+    %     end,
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% ACCELERATION SATURATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     Adv_V_Ref_New = saturate_acceleration(Adv_V_Goal, Adv_V_Ref, Dt, ?ADV_ACCEL, ?ADV_V_MAX),
@@ -27,11 +45,8 @@ controller({Dt, Angle, Speed, Sonar_Data}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal
     receive {_, {control, Acc}} -> ok end,
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% LOGGING %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    case N rem 50 of 0 ->
-            log_buffer:add({controller, erlang:system_time(millisecond), speed_controller, [Adv_V_Ref_New, Speed, Target_Angle]}),
-            log_buffer:add({controller, erlang:system_time(millisecond), stability_controller, [Target_Angle, Angle, Acc]});
-    _ -> ok
-    end,
+    add_log({controller, erlang:system_time(millisecond), speed_controller, [Adv_V_Ref_New, Speed, Target_Angle]}, DoLog),
+    add_log({controller, erlang:system_time(millisecond), stability_controller, [Target_Angle, Angle, Acc]}, DoLog),
     
     {Acc, Adv_V_Ref_New, Turn_V_Ref_New}.
 
@@ -53,4 +68,27 @@ saturate_acceleration(Goal, Ref, Dt, Accel, V_Max) ->
                 _ ->
                     0.0
             end
+    end.
+
+brake_profile(D, _, _) when D =< ?MIN_SONAR_DIST ->
+    % Urgence : stop immédiat
+    0.0;
+
+brake_profile(D, V, Dt) when D =< ?MAX_SONAR_DIST ->
+    % Zone de freinage progressive
+    V1 = V - ?MAX_DECEL * Dt,
+    case V > 0.0 of
+        true -> max(V1, 0.0);
+        false -> min(V1, 0.0)
+    end;
+
+brake_profile(_, V, _) ->
+    % Assez loin, on laisse le contrôleur gérer
+    V.
+
+add_log(Log, DoLog) ->
+    case DoLog of
+        true ->
+            log_buffer:add(Log);
+        false -> ok
     end.

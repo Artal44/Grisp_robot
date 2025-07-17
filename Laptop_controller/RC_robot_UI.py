@@ -4,16 +4,15 @@ import sys
 import numpy as np
 import serial
 from Server import Server
+import socket
+import threading
 
 class User_interface:
-
     # App General State
-    WIDTH, HEIGHT = 1920, 540 # Screen Size
-    RESIZE = 2 # Resizing factor for the rooms
+    WIDTH, HEIGHT = 1920, 540 # Screen Size 
     running = True
     in_popup = False
     active_popup = None
-    UI_elements = {}
     temp_origin = None
     x = 0
     string = ""
@@ -21,21 +20,22 @@ class User_interface:
     rect_dict = {}
     current_action = ""
 
-
+    # Log settings
+    logs = []
+    MAX_LOGS = 10
+    log_messages = []
+    LOG_PORT = 5001  # Port for receiving logs from the robot
+    
     # Robot state
-    message = 0  #Message to send to the robot
+    message = 0  # Message to send to the robot
     run = True 
     stand = False
-    kalman = True
+    kalman = True  # Kalman filter is always enabled and cannot be disabled
     release_space = True
     release_enter = True
     release_t = True
-    release_tab = True
 
-    # Saved Files
-    saved_files = []
-    
-    def __init__(self, trajectory):
+    def __init__(self):
 
         pygame.init()
         self.ser = serial.Serial(port="/dev/ttyACM0", baudrate=115200)
@@ -51,6 +51,12 @@ class User_interface:
 
         self.load_figures()
 
+        self.ui_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.ui_socket.bind(("0.0.0.0", 6000))  # Port UI listens on
+
+        self.log_thread = threading.Thread(target=self.listen_to_logs, daemon=True)
+        self.log_thread.start()
+
     def load_figures(self):
         arrow_img = pygame.image.load('./img/arrow.png')
         arrow_img = pygame.transform.scale(arrow_img, (arrow_img.get_width() // 4, arrow_img.get_height() // 4))
@@ -61,64 +67,16 @@ class User_interface:
         stop_img = pygame.image.load('./img/Stop_sign.png')
         stop_img = pygame.transform.scale(stop_img, (stop_img.get_width() // 10, stop_img.get_height() // 10))
 
-        robot = pygame.image.load('./img/Robot.png')
-        robot = pygame.transform.scale(robot, (robot.get_width()//4, robot.get_height()//4))
-
-        minus_img = pygame.image.load('./img/minus.png')
-        minus_img = pygame.transform.scale(minus_img, (minus_img.get_width() // 5, minus_img.get_height() // 5))
-
-        start_img = pygame.image.load('./img/button_start.png')
-        start_img = pygame.transform.scale(start_img, (start_img.get_width(), start_img.get_height()))
-
-        start_img_pressed = pygame.image.load('./img/start_pressed.png')
-        start_img_pressed = pygame.transform.scale(start_img_pressed, (start_img_pressed.get_width(), start_img_pressed.get_height()))
-
-        save_img = pygame.image.load('./img/button_save.png')
-        save_img = pygame.transform.scale(save_img, (save_img.get_width(), save_img.get_height()))
-
-        load_img = pygame.image.load('./img/button_load.png')
-        load_img = pygame.transform.scale(load_img, (load_img.get_width(), load_img.get_height()))
-
-        zoom_in = pygame.image.load('./img/zoom_in.png')
-        zoom_in = pygame.transform.scale(zoom_in, (zoom_in.get_width()//8, zoom_in.get_height()//8))
-
-        zoom_out = pygame.image.load('./img/zoom_out.png')
-        zoom_out = pygame.transform.scale(zoom_out, (zoom_out.get_width()//8, zoom_out.get_height()//8))
-
+        self.image_dict["stop"] = stop_img
         self.image_dict["arrow"] = arrow_img
         self.image_dict["circle"] = circle_img
-        self.image_dict["stop"] = stop_img
-        self.image_dict["minus"] = minus_img
-        self.image_dict["start"] = start_img
-        self.image_dict["save"] = save_img
-        self.image_dict["load"] = load_img
-        self.image_dict["start_pressed"] = start_img_pressed
-        self.image_dict["zoom_in"] = zoom_in
-        self.image_dict["zoom_out"] = zoom_out
-        self.image_dict["robot"] = robot
 
 ######################################################### TRIGGER CHECK #################################################
 
     def event_handler(self):
         for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                self.server.send("Exit", "brd")
-                self.running = False
-
-            if event.type == pygame.MOUSEBUTTONDOWN:
-                self.event_click(event)
-
             self.manager.process_events(event)
-
-    def event_click(self, event):
-        if self.in_popup:
-            return
-        elif self.is_click_image("start", event):
-            self.is_trajectory_started = True
-            self.server.send_start()
-            self.timer = pygame.time.get_ticks()/1000                                         
-        self.in_popup = False
-
+ 
 ######################################################### KEYBOARD FUNCTIONS #################################################
 
     def check_keys_movement(self, keys):
@@ -129,10 +87,7 @@ class User_interface:
                     self.run = True
                 else:
                     self.run = False
-                    self.is_trajectory_started = False
                     self.current_action = ""
-                    self.action_duration = 0
-                    self.trajectory_idx = 0
         elif keys[pygame.K_z] or keys[pygame.K_UP] or self.current_action == "front":
             self.x += -1
         elif keys[pygame.K_s] or keys[pygame.K_DOWN] or self.current_action == "back":
@@ -148,16 +103,8 @@ class User_interface:
             self.release_space = True
 
     def check_keys_kalman(self, keys):
-        if keys[pygame.K_k]:
-            self.kalman = True
-        elif keys[pygame.K_c]:
-            self.kalman = False
-        elif keys[pygame.K_TAB]:
-            if self.release_tab:
-                self.kalman = not self.kalman
-                self.release_tab = False
-        else:
-            self.release_tab = True
+        # Kalman filter is always enabled and cannot be disabled
+        self.kalman = True
 
     def check_test(self, keys):
         if keys[pygame.K_t] and self.release_t:
@@ -191,19 +138,18 @@ class User_interface:
             self.screen.blit(rotated_arrow, rotated_rect.topleft)
 
     def draw_string(self):
-        font = pygame.font.Font(None, 36)
-        self.string += "DOWN \n" if not self.stand else "UP \n"
-        self.string += "Kalman filter\n" if self.kalman else "Complementary filter\n"
+        font = pygame.font.Font(None, 28)
+        self.string += "DYNAMIC\n" if not self.stand else "STATIC\n"
+        self.string += "Kalman filter\n" if self.kalman else ""
         self.string += "Running\n" if self.run else "Stopped\n"
         self.string += "Message: " + str(self.message) + "\n"
-        self.string += "Timer : 0"
 
-        for i, line in enumerate(self.string.split("\n")):
+        lines = self.string.split("\n") + ["--- LOGS ---"] + self.log_messages
+
+        for i, line in enumerate(lines):
             text = font.render(line, True, (0, 128, 0))
-            self.screen.blit(text, (10, 10 + i * 30))
+            self.screen.blit(text, (10, 10 + i * 24))
 
-    def draw_buttons(self):
-        self.draw_image("start", self.WIDTH-200, 100)
 
 ######################################################### SERIAL COMM FUNCTIONS #################################################
 
@@ -226,25 +172,54 @@ class User_interface:
 
         name = object.type + "_" + side + "_" + str(room_num)
         self.image_dict[name] = img
+
     def draw_image(self, name, x, y):
         plus_rect = self.image_dict.get(name).get_rect(center = (x, y))
         self.screen.blit(self.image_dict.get(name), self.image_dict.get(name).get_rect(center=plus_rect.center))
         self.rect_dict[name] = plus_rect
     
-    def compute_screen_size(self, width, height):
-        return int(width * (self.HEIGHT//self.RESIZE)), int(height * (self.HEIGHT//self.RESIZE))
-    
     def close_popup(self):
         self.active_popup.kill()
         self.active_popup = None
     
+############################################ LOG LISTENER ################################################
+
+    def listen_to_logs(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind(('', self.LOG_PORT))
+            except OSError as e:
+                print(f"[ERROR] Cannot bind UDP log socket on port {self.LOG_PORT}: {e}")
+                return
+
+            while True:
+                try:
+                    data, _ = s.recvfrom(1024)
+                    msg = data.decode().strip()
+                    self.logs.append(msg)
+                    if len(self.logs) > self.MAX_LOGS:
+                        self.logs.pop(0)
+                except:
+                    continue
+
+    def draw_logs(self):
+        font = pygame.font.Font(None, 24)
+        base_y = self.HEIGHT - 25 * self.MAX_LOGS - 10
+        for i, line in enumerate(self.logs):
+            text = font.render(line, True, (0, 0, 0))
+            self.screen.blit(text, (10, base_y + i * 25))
+
+
 ######################################################### MAIN LOOP ############################################################
 
     def main_loop(self):
         while self.running:
+            self.screen.fill((255, 255, 255))
+
             self.event_handler()
             self.update_screen_size()
-
+            
             keys = pygame.key.get_pressed()
             self.x = 0
             self.string = ""
@@ -256,16 +231,13 @@ class User_interface:
                 self.check_test(keys)
                 self.check_standing(keys)
 
-            self.screen.fill((255, 255, 255))
-
-            self.draw_move_ctrl()
-            self.draw_buttons()
+            self.draw_move_ctrl()   
             self.draw_string()
+            self.draw_logs()
 
             self.manager.update(self.clock.tick(60)/1000)
             self.manager.draw_ui(self.screen)
             pygame.display.flip()
-
             self.serial_comm()
 
         # Quit
@@ -273,8 +245,5 @@ class User_interface:
         sys.exit()
 
 if __name__ == '__main__':
-    if len(sys.argv) == 1:
-        ui = User_interface(None)
-    else :
-        ui = User_interface(sys.argv[1])
+    ui = User_interface()
     ui.main_loop()
