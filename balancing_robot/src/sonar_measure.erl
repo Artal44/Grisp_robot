@@ -36,6 +36,8 @@ measure(State) ->
                     hera_com:send_unicast(Sender, Msg, "UTF8")
             end,
             {ok, [RawD], sonar_measure, maps:get(role, State), NewState}
+    after 0 ->
+        {ok, [-1], sonar_measure, maps:get(role, State), State}  
     end.
 
 measure_distance() ->
