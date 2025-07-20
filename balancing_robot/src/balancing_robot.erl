@@ -4,8 +4,6 @@
 
 -export([start/2, stop/1, dump_logs/0]).
 
-% balancing_robot:dump_logs(). 
-
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% GRiSP STARTUP %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -18,7 +16,6 @@ start(_Type, _Args) ->
     log_buffer:add({balancing_robot, erlang:system_time(millisecond), startup}),
 
     numerl:init(),  
-    timer:sleep(2000),
 
     hera_subscribe:subscribe(self()),
     persistent_term:put(server_on, false),
@@ -33,6 +30,7 @@ start(_Type, _Args) ->
             add_GRISP_device(spi2, pmod_nav),
             add_GRISP_device(uart, pmod_maxsonar),
             pmod_nav:config(acc, #{odr_g => {hz,238}}),
+            timer:sleep(5000),
 
             % Main process spawning 
             log_buffer:add({balancing_robot, erlang:system_time(millisecond), robot_main}),
@@ -41,13 +39,14 @@ start(_Type, _Args) ->
 
             % Sonar and nav hera_measure spawning
             spawning_sonar(0, robot_main),
-            hera:start_measure(nav_measure, [robot_main]);
+            hera:start_measure(nav_measure, [Pid_Main, robot_main]);
         1 ->
             [grisp_led:color(L, magenta) || L <- [1, 2]],
             persistent_term:put(name, robot_front_left),
 
             % PMODS initialization and sonar measure spawn
             add_GRISP_device(uart, pmod_maxsonar),
+            timer:sleep(5000),
             spawning_sonar(1, robot_front_left);
         2 ->
             [grisp_led:color(L, magenta) || L <- [1, 2]],
@@ -55,6 +54,7 @@ start(_Type, _Args) ->
 
             % PMODS initialization and sonar measure spawn
             add_GRISP_device(uart, pmod_maxsonar),
+            timer:sleep(5000),
             spawning_sonar(2, robot_front_right);
         _ ->
             io:format("[BALANCING_ROBOT][ERROR] Unknown GRiSP ID: ~p~n", [Id]),
@@ -73,7 +73,7 @@ dump_logs() ->
     log_buffer:dump_to_console().
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% GRISP %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% GRISP ID %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 add_GRISP_device(Port, Name) ->
@@ -109,6 +109,16 @@ get_grisp_id() ->
 
     SUM = (V1) + (V2 bsl 1) + (V3 bsl 2) + (V4 bsl 3) + (V5 bsl 4),
     {ok, SUM}.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% PMODs %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+spawning_sonar(Id, Role) ->
+    % Front left sonar initialization
+    log_buffer:add({balancing_robot, erlang:system_time(millisecond), Role}),
+    {ok, Pid_Sonar} = hera:start_measure(sonar_measure, [Role]),
+    io:format("[BALANCING_ROBOT] GRiSP ID: ~p, Spawned ~p with PID: ~p~n", [Id, Role, Pid_Sonar]),
+    persistent_term:put(pid_sonar, Pid_Sonar).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% NETWORK CONFIGURATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -158,36 +168,6 @@ ack_loop() ->
     end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% LOOP %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-loop() ->
-    receive 
-        {hera_notify, Msg} ->
-            % io:format("[~p] Received hera_notify message: ~p~n", [persistent_term:get(name), Msg]),
-            case Msg of
-                ["ping", _, _, _] ->
-                    ok;
-                ["Add_Device", Name, SIp, Port] ->
-                    add_device(Name, SIp, Port),
-                    loop();
-                ["authorize"] ->
-                    % io:format("[~p] Received authorize, forwarding to sonar~n", [persistent_term:get(name)]),
-                    persistent_term:get(pid_sonar) ! {authorize, robot_main};
-                ["sonar_data", Sonar_Name, D, Seq] ->
-                    % io:format("[~p] Received sonar data from ~p: ~p, Seq: ~p~n", [persistent_term:get(name), Sonar_Name, D, Seq]),
-                    persistent_term:get(pid_main) ! {sonar_data, list_to_atom(Sonar_Name), [list_to_float(D), list_to_integer(Seq)]};
-                _ ->
-                    io:format("[~p] Unhandled content: ~p~n", [persistent_term:get(name), Msg])
-            end,
-            loop();
-        Other ->
-            io:format("[~p] Unexpected message: ~p~n", [persistent_term:get(name), Other]),
-            loop()
-    end.
-
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% LOOP FUNCTIONS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -214,13 +194,35 @@ start_alive_loop() ->
 alive_loop() ->
     Msg = "alive : " ++ atom_to_list(persistent_term:get(name)),
     hera_com:send_unicast(server, Msg, "UTF8"),
-    timer:sleep(20000),
+    timer:sleep(25000),
     alive_loop().
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% LOOP %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-spawning_sonar(Id, Role) ->
-    % Front left sonar initialization
-    log_buffer:add({balancing_robot, erlang:system_time(millisecond), Role}),
-    {ok, Pid_Sonar} = hera:start_measure(sonar_measure, [Role]),
-    io:format("[BALANCING_ROBOT] GRiSP ID: ~p, Spawned ~p with PID: ~p~n", [Id, Role, Pid_Sonar]),
-    persistent_term:put(pid_sonar, Pid_Sonar).
+loop() ->
+    receive 
+        {hera_notify, Msg} ->
+            % io:format("[~p] Received hera_notify message: ~p~n", [persistent_term:get(name), Msg]),
+            case Msg of
+                ["ping", _, _, _] ->
+                    ok;
+                ["Add_Device", Name, SIp, Port] ->
+                    add_device(Name, SIp, Port);
+                ["authorize"] ->
+                    % io:format("[~p] Received authorize, forwarding to sonar~n", [persistent_term:get(name)]),
+                    persistent_term:get(pid_sonar) ! {authorize, robot_main};
+                ["sonar_data", Sonar_Name, D, Seq] ->
+                    % io:format("[~p] Received sonar data from ~p: ~p, Seq: ~p~n", [persistent_term:get(name), Sonar_Name, D, Seq]),
+                    persistent_term:get(pid_main) ! {sonar_data, list_to_atom(Sonar_Name), [list_to_float(D), list_to_integer(Seq)]};
+                _ ->
+                    io:format("[~p] Unhandled content: ~p~n", [persistent_term:get(name), Msg])
+            end,
+            loop();
+        Other ->
+            io:format("[~p] Unexpected message: ~p~n", [persistent_term:get(name), Other]),
+            loop()
+    after 0 ->
+        loop()
+    end.
