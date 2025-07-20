@@ -82,7 +82,10 @@ kalman_predict_only(Dt, [Xk, Pk], Acc) ->
         DW_dTh = ((G / Hh) * math:cos(Th) + (Acc / Hh) * math:sin(Th)) * Dt,
         mat:matrix([[1, Dt], [DW_dTh, 1]])
     end,
-    kalman:ekf_predict({Xk, Pk}, F, Jf, Q, Acc). % {X1, P1}.
+    {X1, P1} = kalman:ekf_predict({Xk, Pk}, F, Jf, Q, Acc), % {X1, P1}.
+    [Th_Kalman, _] = mat:to_array(X1),
+    Angle = Th_Kalman * ?RAD_TO_DEG,
+    [Angle, {X1, P1}].
 
 kalman_angle(Dt, Ax, Az, Gy, Acc, X0, P0) ->
     {R, Q, Jh, G, Hh} = persistent_term:get(kalman_constant),
