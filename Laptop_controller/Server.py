@@ -4,9 +4,9 @@ from Sonar import Sonar
 import time
 
 class Server:
-    HOST = "172.20.10.4"
-    
-    ui_port = 5001          # Port sur lequel le UI écoute
+    HOST = "172.20.10.5" # "172.20.10.4"
+
+    UI_PORT = 5001  # Port sur lequel le UI écoute
     PORT = 5000  # Use the same port on both the server and the GRiSP device
     robot_sonar = {}
     last_seen = {}  # role -> last timestamp
@@ -22,7 +22,7 @@ class Server:
         self.pinger.start()
         self.alive_checker = threading.Thread(target=self.check_alive_loop, daemon=True)
         self.alive_checker.start()
-
+    
     def ping_server(self):
         while not len(self.robot_sonar) == 3:
             time.sleep(5)
@@ -139,11 +139,22 @@ class Server:
         self.send_to_ui(msg)
 
     def send_to_ui(self, message):
-        if self.HOST and self.ui_port:
+        if self.HOST and self.UI_PORT:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-                sock.sendto(message.encode(), (self.HOST, self.ui_port))
+                sock.sendto(message.encode(), (self.HOST, self.UI_PORT))
 
+    def get_local_ip():
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            # dummy connect to find your IP
+            s.connect(("8.8.8.8", 80))
+            IP = s.getsockname()[0]
+        except Exception:
+            IP = "127.0.0.1"
+        finally:
+            s.close()
+        return IP
 
-if __name__ == '__main__' :
+if __name__ == '__main__':
     serv = Server()
 

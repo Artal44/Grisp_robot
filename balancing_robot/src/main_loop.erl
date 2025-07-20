@@ -6,7 +6,7 @@
 
 -define(ADV_V_MAX, 20.0).
 -define(TURN_V_MAX, 80.0).
--define(KALMAN_BIAS_OFFSET, 0.6). % degrees
+-define(KALMAN_BIAS_OFFSET, 1.2). % degrees
 -define(LOG_INTERVAL, 500). % ms
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -72,7 +72,6 @@ robot_loop(State) ->
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SONAR LOGIC %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {Sonar_Role, T_End_Sonar, Current_Seq, Prev_Dist} = maps:get(sonar, State),
     Sonar_Clock_Now = erlang:monotonic_time(second) + erlang:monotonic_time(microsecond) / 1.0e6,
-    Sonar_Turn_Next = sonar_request(Sonar_Role, T_End_Sonar, Sonar_Clock_Now, Adv_V_Goal),
     {Sonar_Data, New_Seq} = sonar_message_handling(Current_Seq, Prev_Dist),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN LOGIC %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -89,6 +88,9 @@ robot_loop(State) ->
     Output_Byte = get_output_state(Next_Robot_State),
     i2c_write(Acc, Turn_V_Ref_New, Output_Byte),
 
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SONAR REQUEST %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    Sonar_Turn_Next = sonar_request(Sonar_Role, T_End_Sonar, Sonar_Clock_Now, Adv_V_Goal),
+    
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% FREQUENCY STABILISATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {N_New, Freq_New, Mean_Freq_New} = frequency_computation(Dt, N, Freq, Mean_Freq),
     maximum_frequency(T1, T_End),
@@ -104,28 +106,6 @@ robot_loop(State) ->
         sonar => {Sonar_Turn_Next, Sonar_Clock_Now, New_Seq, Sonar_Data}
     },
     robot_loop(NewState).
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% CONFIG FUNCTIONS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-calibrate() ->
-    N = 500,
-    Y_List = [pmod_nav:read(acc, [out_y_g]) || _ <- lists:seq(1, N)],
-    Gy0 = lists:sum([Y || [Y] <- Y_List]) / N,
-    persistent_term:put(gy0, Gy0).
-
-valid_nav_data({Gy, Ax, Az}) ->
-    Gy >= -250.0 andalso Gy =< 250.0 andalso
-    Ax >= -12.0 andalso Ax =< 12.0 andalso
-    Az >= -12.0 andalso Az =< 12.0.
-
-wait(T) -> 
-	Tnow = erlang:system_time()/1.0e6,
-	wait_help(Tnow,Tnow+T).
-wait_help(Tnow, Tend) when Tnow >= Tend -> ok;
-wait_help(_, Tend) -> 
-    Tnow = erlang:system_time()/1.0e6,
-    wait_help(Tnow,Tend).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% ROBOT STATE LOGIC %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -246,6 +226,14 @@ maximum_frequency(T1, T_End) ->
             ok
     end.
 
+wait(T) -> 
+	Tnow = erlang:system_time()/1.0e6,
+	wait_help(Tnow,Tnow+T).
+wait_help(Tnow, Tend) when Tnow >= Tend -> ok;
+wait_help(_, Tend) -> 
+    Tnow = erlang:system_time()/1.0e6,
+    wait_help(Tnow,Tend).
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% LOGGING %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -281,7 +269,7 @@ send_to_server(Robot_State) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 sonar_request(Sonar_Role, T_End_Sonar, Sonar_Clock_Now, Adv_V_Goal) ->
-    case (Sonar_Clock_Now - T_End_Sonar > 0.05) of
+    case (Sonar_Clock_Now - T_End_Sonar >= 0.05) of
             true ->
                 case Adv_V_Goal of
                     V when V > 0 ->
@@ -334,27 +322,35 @@ kalman_message_handling(Xk, Pk, Old_Xk, Old_Pk, Acc_Prev, Dt, DoLog) ->
                         {Angle1, X1a, P1a, Old_X1a, Old_P1a};
                     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% BAD NAV DATA %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
                     false ->
-                        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN PREDICTION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-                        {X1a, P1a} = kalman_computations:kalman_predict_only(Dt, [Xk, Pk], Acc_SI),
-
-                        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN COMPARISON %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-                        [Th, _] = mat:to_array(X1a),
-                        [OldTh, _] = mat:to_array(Old_Xk),
-                        add_log({main_loop, erlang:system_time(millisecond), kalman_comparison_predict_only, [Th * ?RAD_TO_DEG - ?KALMAN_BIAS_OFFSET, OldTh * ?RAD_TO_DEG - ?KALMAN_BIAS_OFFSET]}, DoLog),
-                        {Th * ?RAD_TO_DEG, X1a, P1a, Old_Xk, Old_Pk}
+                        kalman_predict_only(Xk, Pk, Old_Xk, Old_Pk, Dt, DoLog, Acc_SI) 
             end
         after 0 ->
-            %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN PREDICTION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-            {X1a, P1a} = kalman_computations:kalman_predict_only(Dt, [Xk, Pk], Acc_SI),
-
-            %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN COMPARISON %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-            [Th, _] = mat:to_array(X1a),
-            [OldTh, _] = mat:to_array(Old_Xk),
-            add_log({main_loop, erlang:system_time(millisecond), kalman_comparison_predict_only, [Th * ?RAD_TO_DEG - ?KALMAN_BIAS_OFFSET, OldTh * ?RAD_TO_DEG - ?KALMAN_BIAS_OFFSET]}, DoLog),
-            
-            {Th * ?RAD_TO_DEG, X1a, P1a, Old_Xk, Old_Pk}
+            kalman_predict_only(Xk, Pk, Old_Xk, Old_Pk, Dt, DoLog, Acc_SI) 
         end,
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% ANGLE CORRECTION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         % Apply a bias offset to the angle to correct for the robot's physical characteristics
         Angle_Corrected = Angle - ?KALMAN_BIAS_OFFSET,
         {Angle_Corrected, X1, P1, Old_X1, Old_P1}.
+
+
+kalman_predict_only(Xk, Pk, Old_Xk, Old_Pk, Dt, DoLog, Acc_SI) ->
+    % Kalman prediction
+    {X1a, P1a} = kalman_computations:kalman_predict_only(Dt, [Xk, Pk], Acc_SI),
+
+    % Kalman comparison
+    [Th, _] = mat:to_array(X1a),
+    [OldTh, _] = mat:to_array(Old_Xk),
+    add_log({main_loop, erlang:system_time(millisecond), kalman_comparison_predict_only, [Th * ?RAD_TO_DEG - ?KALMAN_BIAS_OFFSET, OldTh * ?RAD_TO_DEG - ?KALMAN_BIAS_OFFSET]}, DoLog),
+
+    {Th * ?RAD_TO_DEG, X1a, P1a, Old_Xk, Old_Pk}.
+
+calibrate() ->
+    N = 500,
+    Y_List = [pmod_nav:read(acc, [out_y_g]) || _ <- lists:seq(1, N)],
+    Gy0 = lists:sum([Y || [Y] <- Y_List]) / N,
+    persistent_term:put(gy0, Gy0).
+
+valid_nav_data({Gy, Ax, Az}) ->
+    Gy >= -250.0 andalso Gy =< 250.0 andalso
+    Ax >= -12.0 andalso Ax =< 12.0 andalso
+    Az >= -12.0 andalso Az =< 12.0.
