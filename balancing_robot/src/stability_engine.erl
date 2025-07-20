@@ -17,11 +17,11 @@ controller({Dt, Angle, Speed, Sonar_Data}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal
     {Pid_Speed, Pid_Stability} = persistent_term:get(controllers),
 
     % Applique un freinage si l’obstacle est détecté
-    % Adv_V_Goal_Safe =
-    %     case Sonar_Data > 0.0 of
-    %         true -> brake_profile(Sonar_Data, Adv_V_Goal, Dt);
-    %         false -> Adv_V_Goal
-    %     end,
+    Adv_V_Goal_Safe =
+        case Sonar_Data > 0.0 of
+            true -> brake_profile(Sonar_Data, Adv_V_Goal, Dt);
+            false -> Adv_V_Goal
+        end,
 
     % % Évitement automatique si bloqué
     % Turn_V_Goal_Avoid =
@@ -31,7 +31,7 @@ controller({Dt, Angle, Speed, Sonar_Data}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal
     %     end,
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% ACCELERATION SATURATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    Adv_V_Ref_New = saturate_acceleration(Adv_V_Goal, Adv_V_Ref, Dt, ?ADV_ACCEL, ?ADV_V_MAX),
+    Adv_V_Ref_New = saturate_acceleration(Adv_V_Goal_Safe, Adv_V_Ref, Dt, ?ADV_ACCEL, ?ADV_V_MAX),
     Turn_V_Ref_New = saturate_acceleration(Turn_V_Goal, Turn_V_Ref, Dt, ?TURN_ACCEL, ?TURN_V_MAX),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% ADVANCED SPEED CONTROLLER %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
