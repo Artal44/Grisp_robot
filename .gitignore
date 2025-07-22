@@ -5,3 +5,5 @@
 /Laptop_controller/__pycache__/*
 /venv
 /Laptop_controller/graphs/*
+/Laptop_controller/graphs
+/Laptop_controller/robot_debug.txt
