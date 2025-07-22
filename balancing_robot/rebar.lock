@@ -10,7 +10,7 @@
  {<<"grisp_emulation">>,{pkg,<<"grisp_emulation">>,<<"0.2.2">>},0},
  {<<"hera">>,
   {git,"https://github.com/Artal44/hera",
-       {ref,"81eef6f32cecc0fe88eddac9ccf16b73bc85e275"}},
+       {ref,"385318a628a57eef550f5647cb66a105fe60181d"}},
   0},
  {<<"hera_synchronization">>,
   {git,"https://github.com/sebkm/hera_synchronization",
