@@ -76,6 +76,18 @@ class Server:
                             if len(self.robot_sonar) == 3:
                                 self.broadcast_devices()
                         self.log(f"[SERVER] Received ALIVE from {role} at {self.last_seen[role]}")
+                    elif data.startswith("sonar_data ,"):
+                        parts = data.split(",")
+                        if len(parts) == 4:
+                            role = parts[1].strip()
+                            distance = float(parts[2].strip())
+                            seq = int(parts[3].strip())
+                            self.log(f"[SERVER] Received sonar data from {role}: {distance} cm, seq: {seq}")
+                            if role in self.robot_sonar:
+                                self.robot_sonar[role].update_distance(distance, seq)
+                                self.last_seen[role] = int(time.time())
+                            else:
+                                self.log(f"[SERVER] Unknown role in sonar data: {role}")
                     else :
                         self.log(f"[SERVER] Received unknown message: {data}")
                 except : 
@@ -120,7 +132,7 @@ class Server:
         while True:
             now = int(time.time()) # Current time in seconds
             for role, last_time in self.last_seen.items():
-                if now - last_time > 30:
+                if now - last_time > 65:
                     self.log(f"[SERVER] Lost contact with {role}! Last seen {now - last_time} seconds ago.")
                     if role not in self.lost_robots:
                         self.lost_robots.add(role)

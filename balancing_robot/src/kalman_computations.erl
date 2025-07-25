@@ -63,8 +63,7 @@ update_with_measurement(Gy, Ax, Az, [Xk, Pk]) ->
     {R, _Q, Jh, _G, _Hh} = persistent_term:get(kalman_constant),
     H = fun (X) -> [Th, W] = mat:to_array(X), mat:matrix([[Th], [W]]) end,
     Z = mat:matrix([[math:atan(Az / (-Ax))], [(Gy - persistent_term:get(gy0)) * ?DEG_TO_RAD]]),
-    {X1, P1} = kalman:ekf_correct({Xk, Pk}, H, Jh, R, Z),
-    % kalman:ekf_control({X0, P0}, {F, Jf}, {H, Jh}, Q, R, Z, U)
+    {X1, P1} = hera_kalman:ekf_correct({Xk, Pk}, H, Jh, R, Z),
     [Th_Kalman, _] = mat:to_array(X1),
     Angle = Th_Kalman * ?RAD_TO_DEG,
     [Angle, {X1, P1}].
@@ -75,14 +74,14 @@ kalman_predict_only(Dt, [Xk, Pk], Acc) ->
         [Th, W] = mat:to_array(X),
         Th1 = Th + W * Dt,
         W1 = W + ((G / Hh) * math:sin(Th) - (U / Hh) * math:cos(Th)) * Dt,
-        mat:matrix([[Th1], [W1]])
+         mat:matrix([[Th1], [W1]])
     end,
     Jf = fun (X) ->
         [Th, _] = mat:to_array(X),
         DW_dTh = ((G / Hh) * math:cos(Th) + (Acc / Hh) * math:sin(Th)) * Dt,
         mat:matrix([[1, Dt], [DW_dTh, 1]])
     end,
-    {X1, P1} = kalman:ekf_predict({Xk, Pk}, F, Jf, Q, Acc), % {X1, P1}.
+    {X1, P1} = hera_kalman:ekf_predict({Xk, Pk}, F, Jf, Q, Acc), % {X1, P1}.
     [Th_Kalman, _] = mat:to_array(X1),
     Angle = Th_Kalman * ?RAD_TO_DEG,
     [Angle, {X1, P1}].
@@ -114,7 +113,7 @@ kalman_angle(Dt, Ax, Az, Gy, Acc, X0, P0) ->
 
     % Measurement vector: angle from accelerometer, angular velocity from gyro
     Z = mat:matrix([[math:atan(Az / (-Ax))], [(Gy - persistent_term:get(gy0)) * ?DEG_TO_RAD]]),
-    {X1, P1} = kalman:ekf_control({X0, P0}, {F, Jf}, {H, Jh}, Q, R, Z, Acc),
+    {X1, P1} = hera_kalman:ekf_control({X0, P0}, {F, Jf}, {H, Jh}, Q, R, Z, Acc),
 
     [Th_Kalman, _W_Kalman] = mat:to_array(X1),
     Angle = Th_Kalman * ?RAD_TO_DEG,
@@ -155,7 +154,7 @@ old_kalman_angle(Dt, Ax, Az, Gy, X0, P0) ->
 		end,
     
     Z = mat:matrix([[math:atan(Az / (-Ax))], [(Gy-Gy0)*?DEG_TO_RAD]]),
-    {X1, P1} = kalman:ekf({X0, P0}, {F, Jf}, {H, Jh}, Q, R, Z),
+    {X1, P1} = hera_kalman:ekf({X0, P0}, {F, Jf}, {H, Jh}, Q, R, Z),
 
     [Th_Kalman, _W_Kalman] = mat:to_array(X1),
     Angle = Th_Kalman * ?RAD_TO_DEG,

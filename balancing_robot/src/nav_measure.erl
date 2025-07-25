@@ -5,11 +5,11 @@
 
 init([Pid, Role]) ->
     Name = list_to_atom("NAV_" ++ atom_to_list(Role)),
-    io:format("[NAV] Starting ~p~n", [Role]),
+    hera:logg("[NAV] Starting ~p~n", [Role]),
     {ok, #{seq => 1, target => Pid, role => Role}, #{
         name => Name,
         iter => infinity,
-        timeout => 5
+        timeout => 5 % ODR is 238 Hz, the sensor updates every ~4.2 ms.
       }}.
 
 measure(State) ->
@@ -22,6 +22,6 @@ measure(State) ->
         {ok, [Gy, Ax, Az], nav_measure, maps:get(role, State), NewState}
     catch
         _:Error ->
-            io:format("[NAV][ERROR] ~p~n", [Error]),
+            hera:logg("[NAV][ERROR] ~p~n", [Error]),
             {ok, [], maps:get(role, State), State}
     end.

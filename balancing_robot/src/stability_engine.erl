@@ -8,13 +8,16 @@
 -define(TURN_V_MAX, 80.0).
 -define(TURN_ACCEL, 400.0).
 
--define(MIN_SONAR_DIST, 0.10).   
--define(MAX_SONAR_DIST, 0.50).  
--define(MAX_DECEL, 8.0).         
+-define(MIN_SONAR_DIST, 0.3).   
+-define(MAX_SONAR_DIST, 1.0).  
+-define(MAX_DECEL, 6.0).      
+
+-define(ANGLE_OFFSET, 1.0).
 
 controller({Dt, Angle, Speed, Sonar_Data}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal, Turn_V_Ref}, DoLog) ->
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% CONTROLLER %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {Pid_Speed, Pid_Stability} = persistent_term:get(controllers),
+
 
     % Applique un freinage si l’obstacle est détecté
     Adv_V_Goal_Safe =
@@ -23,16 +26,16 @@ controller({Dt, Angle, Speed, Sonar_Data}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal
             false -> Adv_V_Goal
         end,
 
-    % % Évitement automatique si bloqué
-    % Turn_V_Goal_Avoid =
-    %     case Sonar_Data =< ?MIN_SONAR_DIST andalso Adv_V_Goal > 0.0 of
-    %         true -> ?TURN_V_MAX;  % tourne à droite (ou -?TURN_V_MAX à gauche)
-    %         false -> Turn_V_Goal
-    %     end,
+    % Évitement automatique si bloqué
+    Turn_V_Goal_Avoid =
+        case Sonar_Data =< ?MIN_SONAR_DIST andalso Adv_V_Goal > 0.0 of
+            true -> ?TURN_V_MAX;  % tourne à droite (ou -?TURN_V_MAX à gauche)
+            false -> Turn_V_Goal
+        end,
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% ACCELERATION SATURATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     Adv_V_Ref_New = saturate_acceleration(Adv_V_Goal_Safe, Adv_V_Ref, Dt, ?ADV_ACCEL, ?ADV_V_MAX),
-    Turn_V_Ref_New = saturate_acceleration(Turn_V_Goal, Turn_V_Ref, Dt, ?TURN_ACCEL, ?TURN_V_MAX),
+    Turn_V_Ref_New = saturate_acceleration(Turn_V_Goal_Avoid, Turn_V_Ref, Dt, ?TURN_ACCEL, ?TURN_V_MAX),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% ADVANCED SPEED CONTROLLER %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     Pid_Speed ! {self(), {set_point, Adv_V_Ref_New}},
@@ -40,8 +43,9 @@ controller({Dt, Angle, Speed, Sonar_Data}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal
     receive {_, {control, Target_Angle}} -> ok end,
     
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% STABILITY CONTROLLER %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    Corrected_Angle = Angle - ?ANGLE_OFFSET,
     Pid_Stability ! {self(), {set_point, Target_Angle}},
-    Pid_Stability ! {self(), {input, Angle}},
+    Pid_Stability ! {self(), {input, Corrected_Angle}},
     receive {_, {control, Acc}} -> ok end,
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% LOGGING %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -56,15 +60,15 @@ controller({Dt, Angle, Speed, Sonar_Data}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal
 saturate_acceleration(Goal, Ref, Dt, Accel, V_Max) ->
     case Goal of
         G when G > 0.0 ->
-            pid_controller:saturation(Ref + Accel * Dt, V_Max);
+            hera_pid_controller:saturation(Ref + Accel * Dt, V_Max);
         G when G < 0.0 ->
-            pid_controller:saturation(Ref - Accel * Dt, V_Max);
+            hera_pid_controller:saturation(Ref - Accel * Dt, V_Max);
         _ ->
             case Ref of
                 R when R > 0.05 ->
-                    pid_controller:saturation(Ref - Accel * Dt, V_Max);
+                    hera_pid_controller:saturation(Ref - Accel * Dt, V_Max);
                 R when R < -0.05 ->
-                    pid_controller:saturation(Ref + Accel * Dt, V_Max);
+                    hera_pid_controller:saturation(Ref + Accel * Dt, V_Max);
                 _ ->
                     0.0
             end
@@ -76,7 +80,11 @@ brake_profile(D, _, _) when D =< ?MIN_SONAR_DIST ->
 
 brake_profile(D, V, Dt) when D =< ?MAX_SONAR_DIST ->
     % Zone de freinage progressive
-    V1 = V - ?MAX_DECEL * Dt,
+    V1 = 
+        case V > 0.0 of
+            true -> V - ?MAX_DECEL * Dt;  
+            false -> V + ?MAX_DECEL * Dt   
+        end,
     case V > 0.0 of
         true -> max(V1, 0.0);
         false -> min(V1, 0.0)
