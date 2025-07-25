@@ -10,20 +10,21 @@
 
 start(_Type, _Args) ->
     {ok, Supervisor} = balancing_robot_sup:start_link(),
+    [grisp_led:flash(L, yellow, 500) || L <- [1, 2]],
 
     % Log buffer initialization
     log_buffer:init(10000),
     log_buffer:add({balancing_robot, erlang:system_time(millisecond), startup}),
 
     numerl:init(),  
-
     hera_subscribe:subscribe(self()),
     persistent_term:put(server_on, false),
+    spawn(fun() -> hera_notify_loop() end),
 
     {ok, Id} = get_grisp_id(),
     case Id of
         0 ->
-            io:format("[BALANCING_ROBOT] GRiSP ID: ~p, Spawning robot_main~n", [Id]),
+            hera:logg("[BALANCING_ROBOT] GRiSP ID: ~p, Spawning robot_main~n", [Id]),
             persistent_term:put(name, robot_main),
             
             % PMODS initialization
@@ -41,7 +42,6 @@ start(_Type, _Args) ->
             spawning_sonar(0, robot_main),
             hera:start_measure(nav_measure, [Pid_Main, robot_main]);
         1 ->
-            [grisp_led:color(L, magenta) || L <- [1, 2]],
             persistent_term:put(name, robot_front_left),
 
             % PMODS initialization and sonar measure spawn
@@ -49,7 +49,6 @@ start(_Type, _Args) ->
             timer:sleep(5000),
             spawning_sonar(1, robot_front_left);
         2 ->
-            [grisp_led:color(L, magenta) || L <- [1, 2]],
             persistent_term:put(name, robot_front_right),
 
             % PMODS initialization and sonar measure spawn
@@ -57,12 +56,11 @@ start(_Type, _Args) ->
             timer:sleep(5000),
             spawning_sonar(2, robot_front_right);
         _ ->
-            io:format("[BALANCING_ROBOT][ERROR] Unknown GRiSP ID: ~p~n", [Id]),
+            hera:logg("[BALANCING_ROBOT][ERROR] Unknown GRiSP ID: ~p~n", [Id]),
             log_buffer:add({balancing_robot, erlang:system_time(millisecond), unknown_id})
     end,
 
     config(),
-    loop(),
     {ok, Supervisor}.
 
 stop(_State) -> 
@@ -79,16 +77,13 @@ dump_logs() ->
 add_GRISP_device(Port, Name) ->
     case catch grisp:add_device(Port, Name) of
         {device, _, _, _, _} = DeviceInfo ->
-            io:format("[~p] Device ~p added (info: ~p)~n", [persistent_term:get(name), Name, DeviceInfo]);
-        {error, Reason} ->
-            io:format("[~p] Device ~p not added: ~p~n", [persistent_term:get(name), Name, Reason]),
-            timer:sleep(2000),
-            add_GRISP_device(Port, Name);
-        {'EXIT', _Reason} ->
-            io:format("[~p] grisp:add_device(~p, ~p) crashed, restarting node...~n", [persistent_term:get(name), Port, Name]),
-            init:restart();
+            grisp_led:flash(1, green, 250),
+            grisp_led:flash(2, green, 500),
+            hera:logg("[~p] Device ~p added (info: ~p)~n", [persistent_term:get(name), Name, DeviceInfo]);
         Other ->
-            io:format("[~p] Unexpected return from grisp:add_device(~p, ~p): ~p~n", [persistent_term:get(name), Port, Name, Other]),
+            grisp_led:flash(1, red, 750),
+            grisp_led:flash(2, yellow, 500),
+            hera:logg("[~p] Unexpected return from grisp:add_device(~p, ~p): ~p~n", [persistent_term:get(name), Port, Name, Other]),
             timer:sleep(2000),
             add_GRISP_device(Port, Name)
     end.
@@ -117,7 +112,7 @@ spawning_sonar(Id, Role) ->
     % Front left sonar initialization
     log_buffer:add({balancing_robot, erlang:system_time(millisecond), Role}),
     {ok, Pid_Sonar} = hera:start_measure(sonar_measure, [Role]),
-    io:format("[BALANCING_ROBOT] GRiSP ID: ~p, Spawned ~p with PID: ~p~n", [Id, Role, Pid_Sonar]),
+    hera:logg("[BALANCING_ROBOT] GRiSP ID: ~p, Spawned ~p with PID: ~p~n", [Id, Role, Pid_Sonar]),
     persistent_term:put(pid_sonar, Pid_Sonar).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -128,28 +123,32 @@ config() ->
     await_connection().
 await_connection() ->
     % Waiting for HERA to notify succesful connection
-    io:format("[~p] WiFi setup starting...~n", [persistent_term:get(name)]),
+    hera:logg("[~p] WiFi setup starting...~n", [persistent_term:get(name)]),
     receive        
         {hera_notify, "connected"} -> % Received when hera_com managed to connect to the network
-            io:format("[~p] WiFi setup done~n~n", [persistent_term:get(name)]),
+            hera:logg("[~p] WiFi setup done~n~n", [persistent_term:get(name)]),
+            [grisp_led:flash(L, white, 1000) || L <- [1, 2]],
             discover_server()
     after 18000 ->
-        io:format("[~p] WiFi setup failed:~n~n", [persistent_term:get(name)]),
+        hera:logg("[~p] WiFi setup failed:~n~n", [persistent_term:get(name)]),
+        [grisp_led:flash(L, red, 2000) || L <- [1, 2]],
         await_connection()
     end.
 
 discover_server() ->
     % Waits forever until the server sends a Ping
-    io:format("[~p] Waiting for ping from server~n", [persistent_term:get(name)]),
+    hera:logg("[~p] Waiting for ping from server~n", [persistent_term:get(name)]),
     receive
         {hera_notify, ["ping", Name, SIp, Port]} -> % Received upon server ping reception
-            io:format("[~p] Received ping from server: ~p, IP: ~p, Port: ~p~n", [persistent_term:get(name), Name, SIp, Port]),
+            hera:logg("[~p] Received ping from server: ~p, IP: ~p, Port: ~p~n", [persistent_term:get(name), Name, SIp, Port]),
             {ok, Ip} = inet:parse_address(SIp),
             IntPort = list_to_integer(Port),
             hera_com:add_device(list_to_atom(Name), Ip, IntPort),
             ack_loop()
     after 9000 ->
-        io:format("[~p] no ping from server~n", [persistent_term:get(name)]),
+        hera:logg("[~p] no ping from server~n", [persistent_term:get(name)]),
+        grisp_led:flash(1, red, 750),
+        grisp_led:flash(1, black, 500),
         discover_server()
     end.
 
@@ -159,7 +158,8 @@ ack_loop() ->
     hera_com:send_unicast(server, Payload, "UTF8"),
     receive
         {hera_notify, ["Ack", _]} -> % Ensures the discovery of the sensor by the server
-            io:format("[~p] Received ACK from server~n", [persistent_term:get(name)]),
+            hera:logg("[~p] Received ACK from server~n", [persistent_term:get(name)]),
+            [grisp_led:flash(L, magenta, 1000) || L <- [1, 2]],
             start_alive_loop(),
             persistent_term:put(server_on, true),
             ok       
@@ -185,44 +185,36 @@ add_device(Name, SIp, SPort) ->
             {ok, Ip} = inet:parse_address(SIp),
             Port = list_to_integer(SPort),
             hera_com:add_device(OName, Ip, Port),
-            io:format("[BALANCING_ROBOT] Adding device: ~p, IP: ~p, Port: ~p~n", [OName, Ip, SPort])     
+            hera:logg("[BALANCING_ROBOT] Adding device: ~p, IP: ~p, Port: ~p~n", [OName, Ip, SPort])     
     end.
 
 start_alive_loop() ->
     spawn(fun alive_loop/0).
 
 alive_loop() ->
+    [grisp_led:color(L, aqua) || L <- [1, 2]],
     Msg = "alive : " ++ atom_to_list(persistent_term:get(name)),
     hera_com:send_unicast(server, Msg, "UTF8"),
-    timer:sleep(25000),
+    timer:sleep(60000),
     alive_loop().
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% LOOP %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-loop() ->
-    receive 
+hera_notify_loop() ->
+    receive
         {hera_notify, Msg} ->
-            % io:format("[~p] Received hera_notify message: ~p~n", [persistent_term:get(name), Msg]),
-            case Msg of
-                ["ping", _, _, _] ->
-                    ok;
-                ["Add_Device", Name, SIp, Port] ->
-                    add_device(Name, SIp, Port);
-                ["authorize"] ->
-                    % io:format("[~p] Received authorize, forwarding to sonar~n", [persistent_term:get(name)]),
-                    persistent_term:get(pid_sonar) ! {authorize, robot_main};
-                ["sonar_data", Sonar_Name, D, Seq] ->
-                    % io:format("[~p] Received sonar data from ~p: ~p, Seq: ~p~n", [persistent_term:get(name), Sonar_Name, D, Seq]),
-                    persistent_term:get(pid_main) ! {sonar_data, list_to_atom(Sonar_Name), [list_to_float(D), list_to_integer(Seq)]};
-                _ ->
-                    io:format("[~p] Unhandled content: ~p~n", [persistent_term:get(name), Msg])
-            end,
-            loop();
+            handle_hera_notify(Msg),
+            hera_notify_loop();
         Other ->
-            io:format("[~p] Unexpected message: ~p~n", [persistent_term:get(name), Other]),
-            loop()
-    after 0 ->
-        loop()
+            hera:logg("[~p] Unexpected message: ~p~n", [persistent_term:get(name), Other])
     end.
+
+handle_hera_notify(["ping", _, _, _]) ->
+    ok;
+handle_hera_notify(["Add_Device", Name, SIp, Port]) ->
+    add_device(Name, SIp, Port);
+handle_hera_notify(["authorize"]) ->
+    persistent_term:get(pid_sonar) ! {authorize, robot_main};
+handle_hera_notify(["sonar_data", Sonar_Name, D, Seq]) ->
+    persistent_term:get(pid_main) ! {sonar_data, list_to_atom(Sonar_Name), [list_to_float(D), list_to_integer(Seq)]};
+handle_hera_notify(Other) ->
+    io:format("[~p] Unhandled hera_notify: ~p~n", [persistent_term:get(name), Other]).
+
