@@ -132,7 +132,7 @@ class Server:
         while True:
             now = int(time.time()) # Current time in seconds
             for role, last_time in self.last_seen.items():
-                if now - last_time > 65:
+                if now - last_time > 30:
                     self.log(f"[SERVER] Lost contact with {role}! Last seen {now - last_time} seconds ago.")
                     if role not in self.lost_robots:
                         self.lost_robots.add(role)

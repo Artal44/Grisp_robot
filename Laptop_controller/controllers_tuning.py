@@ -82,7 +82,7 @@ for ctrl in df['Controller'].unique():
     plt.title(f'{ctrl} Controller Response Over Time')
     plt.xlabel('Time (s)')
     plt.ylabel(ylabel)
-    plt.ylim(-5, 5)
+    # plt.ylim(-5, 5)
     plt.legend()
     plt.grid(True)
     plt.tight_layout()

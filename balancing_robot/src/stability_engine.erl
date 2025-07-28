@@ -2,15 +2,14 @@
 
 -export([controller/4]).
 
--define(ADV_V_MAX, 25.0).
+-define(ADV_V_MAX, 20.0).
 -define(ADV_ACCEL, 8.0).
 
 -define(TURN_V_MAX, 80.0).
 -define(TURN_ACCEL, 400.0).
 
--define(MIN_SONAR_DIST, 0.3).   
--define(MAX_SONAR_DIST, 1.0).  
--define(MAX_DECEL, 6.0).      
+-define(MIN_SONAR_DIST, 0.4).   
+-define(MAX_SONAR_DIST, 1.0).   
 
 -define(ANGLE_OFFSET, 1.0).
 
@@ -18,19 +17,18 @@ controller({Dt, Angle, Speed, Sonar_Data}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% CONTROLLER %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {Pid_Speed, Pid_Stability} = persistent_term:get(controllers),
 
-
-    % Applique un freinage si l’obstacle est détecté
-    Adv_V_Goal_Safe =
-        case Sonar_Data > 0.0 of
-            true -> brake_profile(Sonar_Data, Adv_V_Goal, Dt);
-            false -> Adv_V_Goal
-        end,
-
-    % Évitement automatique si bloqué
+     % % Évitement automatique si bloqué
     Turn_V_Goal_Avoid =
         case Sonar_Data =< ?MIN_SONAR_DIST andalso Adv_V_Goal > 0.0 of
             true -> ?TURN_V_MAX;  % tourne à droite (ou -?TURN_V_MAX à gauche)
             false -> Turn_V_Goal
+        end,
+
+    % Applique un freinage si l’obstacle est détecté
+    Adv_V_Goal_Safe =
+        case Sonar_Data < ?MAX_SONAR_DIST of
+            true -> 0.0;
+            false -> Adv_V_Goal
         end,
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% ACCELERATION SATURATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -73,26 +71,6 @@ saturate_acceleration(Goal, Ref, Dt, Accel, V_Max) ->
                     0.0
             end
     end.
-
-brake_profile(D, _, _) when D =< ?MIN_SONAR_DIST ->
-    % Urgence : stop immédiat
-    0.0;
-
-brake_profile(D, V, Dt) when D =< ?MAX_SONAR_DIST ->
-    % Zone de freinage progressive
-    V1 = 
-        case V > 0.0 of
-            true -> V - ?MAX_DECEL * Dt;  
-            false -> V + ?MAX_DECEL * Dt   
-        end,
-    case V > 0.0 of
-        true -> max(V1, 0.0);
-        false -> min(V1, 0.0)
-    end;
-
-brake_profile(_, V, _) ->
-    % Assez loin, on laisse le contrôleur gérer
-    V.
 
 add_log(Log, DoLog) ->
     case DoLog of

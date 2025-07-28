@@ -3,6 +3,7 @@
 -export([robot_init/0]).
 
 -define(RAD_TO_DEG, 180.0/math:pi()).
+-define(DEG_TO_RAD, math:pi()/180.0).
 
 -define(ADV_V_MAX, 20.0).
 -define(TURN_V_MAX, 80.0).
@@ -38,7 +39,7 @@ robot_init() ->
         move_speed => {0.0, 0.0}, % {Adv_V_Ref, Turn_V_Ref}
         frequency => {0, 0, 200.0, T0}, % {N, Freq, Mean_Freq, T_End}
         acc_prev => 0.0, % Acc_Prev
-        sonar => {robot_front_left, 0.0, 0, 100.0}, % {Sonar_Role, T_End_Sonar, Current_Seq, Prev_Dist}
+        sonar => {robot_front_left, 0.0, 0, none}, % {Sonar_Role, T_End_Sonar, Current_Seq, Prev_Dist}
         last_log_time => erlang:system_time(millisecond) % LastLog
     },
 
@@ -73,7 +74,7 @@ robot_loop(State) ->
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN LOGIC %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     Acc_Prev = maps:get(acc_prev, State),
-    {Angle, X1, P1} = kalman_message_handling(Xk, Pk, Acc_Prev, Dt, DoLog),
+    {Angle, X1, P1} = kalman_message_handling(Xk, Pk, Acc_Prev, Dt, Robot_State, DoLog),
     
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SET NEW ENGINES COMMANDS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {Adv_V_Ref, Turn_V_Ref} = maps:get(move_speed, State),
@@ -156,11 +157,11 @@ i2c_read() ->
             Speed = (Speed_L + Speed_R)/2,
             {Speed, CtrlByte};
         {error, Reason} ->
-            hera:logg("[ROBOT][I2C ERROR] Error response: ~p~n", [{error, Reason}]),
+            io:format("[ROBOT][I2C ERROR] Error response: ~p~n", [{error, Reason}]),
             timer:sleep(5000),
             i2c_read();
         Other ->
-            hera:logg("[ROBOT][I2C ERROR] Unexpected response: ~p~n", [Other]),
+            io:format("[ROBOT][I2C ERROR] Unexpected response: ~p~n", [Other]),
             timer:sleep(5000),
             i2c_read()
     end.
@@ -180,9 +181,9 @@ i2c_write(Acc, Turn_V_Ref_New, Output_Byte) ->
 speed_ref(Forward, Backward) ->
     if
         Forward ->
-            Adv_V_Goal = ?ADV_V_MAX;
+            Adv_V_Goal = -?ADV_V_MAX;
         Backward ->
-            Adv_V_Goal = - ?ADV_V_MAX;
+            Adv_V_Goal = +?ADV_V_MAX;
         true ->
             Adv_V_Goal = 0.0
     end,
@@ -269,11 +270,11 @@ sonar_request(Sonar_Role, T_End_Sonar, Sonar_Clock_Now, Adv_V_Goal) ->
     case (Sonar_Clock_Now - T_End_Sonar > 0.05) of
             true ->
                 case Adv_V_Goal of
-                    V when V > 0 ->
+                    V when V < 0 ->
                         % Recule : on interroge uniquement le sonar arrière
                         persistent_term:get(pid_sonar) ! {authorize, self()},
                         Sonar_Role;
-                    V when V < 0 ->
+                    V when V > 0 ->
                         % Avance : alternance front_left <-> front_right
                         Next_Role = case Sonar_Role of
                             robot_front_left -> robot_front_right;
@@ -293,7 +294,7 @@ sonar_message_handling(Current_Seq, Prev_Dist) ->
         {sonar_data, Sonar_Name, [D, Seq]} ->
             D_M = D / 100.0,
             add_log({main_loop, erlang:system_time(millisecond), new_sonar_measure, [Sonar_Name, D_M]}, true),
-            hera:logg("[ROBOT][SONAR] Sonar data received: ~p from ~p~n", [D_M, Sonar_Name]),
+            io:format("[ROBOT][SONAR] Sonar data received: ~p from ~p~n", [D_M, Sonar_Name]),
             {D_M, Seq}
     after 0 ->
         {Prev_Dist, Current_Seq}
@@ -302,12 +303,12 @@ sonar_message_handling(Current_Seq, Prev_Dist) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-kalman_message_handling(Xk, Pk, Acc_Prev, Dt, DoLog) ->
+kalman_message_handling(Xk, Pk, Acc_Prev, Dt, Robot_State, DoLog) ->
     Acc_SI = Acc_Prev / 100.0, % Convert acceleration from cm/s^2 to m/s^2
     {Angle, X1, P1} = 
     receive 
             {nav_data, [Gy_raw, Ax_raw, Az_raw]} ->
-                case valid_nav_data({Gy_raw, Ax_raw, Az_raw}) of
+                case valid_nav_data(Robot_State, {Gy_raw, Ax_raw, Az_raw}) of
                     true ->
                         Gy = Gy_raw,
                         Ax = Ax_raw,
@@ -340,8 +341,23 @@ calibrate() ->
     Gy0 = lists:sum([Y || [Y] <- Y_List]) / N,
     persistent_term:put(gy0, Gy0).
 
-valid_nav_data({Gy, Ax, Az}) ->
-    Gy >= -200.0 andalso Gy =< 200.0 andalso
-    Ax >= -10.0 andalso Ax =< 10.0 andalso
-    Az >= -10.0 andalso Az =< 10.0.
+valid_nav_data(Robot_State, {Gy, Ax, Az}) ->
+    case Robot_State of
+        dynamic ->
+            valid_dynamic_nav_data(Gy, Ax, Az, 10, 100);
+        _ ->
+            %no need to check static or rest state, as they are not used for navigation
+            true
+    end.
+valid_dynamic_nav_data(Gy, Ax, Az, MaxAngleDeg, MaxGyDegPerSec) ->
+    % Convert allowed angle to radians
+    MaxAngleRad = MaxAngleDeg * ?DEG_TO_RAD,
 
+    % Compute expected accelerometer projections for that angle
+    % Assuming gravity = 9.81 m/s² and robot tilt around Ax/Az
+    Expected_Ax = -9.81 * math:cos(MaxAngleRad),
+    Expected_Az =  9.81 * math:sin(MaxAngleRad),
+
+    Gy >= -MaxGyDegPerSec andalso Gy =< MaxGyDegPerSec andalso
+    Ax >= Expected_Ax - 0.5 andalso Ax =< Expected_Ax + 0.5 andalso
+    Az >= Expected_Az - 0.5 andalso Az =< Expected_Az + 0.5.

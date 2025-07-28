@@ -1,22 +1,22 @@
 -module(sonar_measure).
+-behavior(hera_measure).
 
 -export([init/1, measure/1]).
 
 init([Role]) ->
     Name = list_to_atom("SONAR_" ++ atom_to_list(Role)),
-    hera:logg("[SONAR] Starting ~p~n", [Role]),
+    io:format("[SONAR] Starting ~p~n", [Role]),
     Tnow = erlang:system_time(millisecond),
     {ok, #{seq => 1, role => Role, last_distance => none, last_time => Tnow}, #{
         name => Name,
         iter => infinity,
-        timeout => infinity  %% => on attend uniquement les authorize
+        timeout => 50  %% => on attend uniquement les authorize
     }}.
 
 measure(State) ->
     Role = maps:get(role, State),
     receive
         {authorize, Sender} ->
-            io:format("[SONAR] ~p: Measure authorized by ~p~n", [Role, Sender]),
             Tnow = erlang:system_time(millisecond),
             PrevT = maps:get(last_time, State),
             Dt = Tnow - PrevT,
@@ -61,7 +61,7 @@ filter(New, Prev, Dt) ->
 
     case New - Prev > Threshold of
         true -> Prev; 
-        false -> low_pass_filter(New, Prev, Alpha)
+        false -> round_to(low_pass_filter(New, Prev, Alpha), 2)
     end.
 
 compute_alpha(Dt) when Dt < 200 -> 0.7;

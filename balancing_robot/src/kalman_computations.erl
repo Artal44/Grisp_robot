@@ -74,9 +74,9 @@ kalman_predict_only(Dt, [Xk, Pk], Acc) ->
         [Th, W] = mat:to_array(X),
         Th1 = Th + W * Dt,
         W1 = W + ((G / Hh) * math:sin(Th) - (U / Hh) * math:cos(Th)) * Dt,
-         mat:matrix([[Th1], [W1]])
+        mat:matrix([[Th1], [W1]])
     end,
-    Jf = fun (X) ->
+    Jf = fun (X) -> 
         [Th, _] = mat:to_array(X),
         DW_dTh = ((G / Hh) * math:cos(Th) + (Acc / Hh) * math:sin(Th)) * Dt,
         mat:matrix([[1, Dt], [DW_dTh, 1]])

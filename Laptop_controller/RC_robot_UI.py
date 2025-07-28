@@ -75,7 +75,10 @@ class User_interface:
 
     def event_handler(self):
         for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.running = False
             self.manager.process_events(event)
+
  
 ######################################################### KEYBOARD FUNCTIONS #################################################
 
