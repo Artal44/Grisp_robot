@@ -3,7 +3,6 @@
 -export([robot_init/0]).
 
 -define(RAD_TO_DEG, 180.0/math:pi()).
--define(DEG_TO_RAD, math:pi()/180.0).
 
 -define(ADV_V_MAX, 20.0).
 -define(TURN_V_MAX, 80.0).
@@ -74,7 +73,7 @@ robot_loop(State) ->
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN LOGIC %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     Acc_Prev = maps:get(acc_prev, State),
-    {Angle, X1, P1} = kalman_message_handling(Xk, Pk, Acc_Prev, Dt, Robot_State, DoLog),
+    {Angle, X1, P1} = kalman_message_handling(Xk, Pk, Acc_Prev, Dt, DoLog),
     
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SET NEW ENGINES COMMANDS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {Adv_V_Ref, Turn_V_Ref} = maps:get(move_speed, State),
@@ -303,30 +302,22 @@ sonar_message_handling(Current_Seq, Prev_Dist) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-kalman_message_handling(Xk, Pk, Acc_Prev, Dt, Robot_State, DoLog) ->
+kalman_message_handling(Xk, Pk, Acc_Prev, Dt, DoLog) ->
     Acc_SI = Acc_Prev / 100.0, % Convert acceleration from cm/s^2 to m/s^2
     {Angle, X1, P1} = 
     receive 
-            {nav_data, [Gy_raw, Ax_raw, Az_raw]} ->
-                case valid_nav_data(Robot_State, {Gy_raw, Ax_raw, Az_raw}) of
-                    true ->
-                        Gy = Gy_raw,
-                        Ax = Ax_raw,
-                        Az = Az_raw,
-                        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN PREDICTION + CORRECTION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-                        [Angle1, {X1a, P1a}] = kalman_computations:kalman_angle(Dt, Ax, Az, Gy, Acc_SI, Xk, Pk),
+        {nav_data, [Gy, Ax, Az]} ->
+            %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN PREDICTION + CORRECTION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+            [Angle1, {X1a, P1a}] = kalman_computations:kalman_angle(Dt, Ax, Az, Gy, Acc_SI, Xk, Pk),
 
-                        %%%%%%%%%%%%%%%%%%%%%%%%%%%%% MEASURED DIRECT ANGLE  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-                        Direct_angle = math:atan(Az / (-Ax)) * ?RAD_TO_DEG,
-                        add_log({main_loop, erlang:system_time(millisecond), kalman_comparison, [Angle1, Direct_angle]}, DoLog),
-                        {Angle1, X1a, P1a};
-                    false ->
-                        kalman_predict_only(Xk, Pk, Dt, DoLog, Acc_SI) 
-            end
-        after 0 ->
-            kalman_predict_only(Xk, Pk, Dt, DoLog, Acc_SI) 
-        end,
-        {Angle, X1, P1}.
+            %%%%%%%%%%%%%%%%%%%%%%%%%%%%% MEASURED DIRECT ANGLE  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+            Direct_angle = math:atan(Az / (-Ax)) * ?RAD_TO_DEG,
+            add_log({main_loop, erlang:system_time(millisecond), kalman_comparison, [Angle1, Direct_angle]}, DoLog),
+                {Angle1, X1a, P1a}
+    after 0 ->
+        kalman_predict_only(Xk, Pk, Dt, DoLog, Acc_SI) 
+    end,
+    {Angle, X1, P1}.
 
 
 kalman_predict_only(Xk, Pk, Dt, DoLog, Acc_SI) ->
@@ -341,23 +332,3 @@ calibrate() ->
     Gy0 = lists:sum([Y || [Y] <- Y_List]) / N,
     persistent_term:put(gy0, Gy0).
 
-valid_nav_data(Robot_State, {Gy, Ax, Az}) ->
-    case Robot_State of
-        dynamic ->
-            valid_dynamic_nav_data(Gy, Ax, Az, 10, 100);
-        _ ->
-            %no need to check static or rest state, as they are not used for navigation
-            true
-    end.
-valid_dynamic_nav_data(Gy, Ax, Az, MaxAngleDeg, MaxGyDegPerSec) ->
-    % Convert allowed angle to radians
-    MaxAngleRad = MaxAngleDeg * ?DEG_TO_RAD,
-
-    % Compute expected accelerometer projections for that angle
-    % Assuming gravity = 9.81 m/s² and robot tilt around Ax/Az
-    Expected_Ax = -9.81 * math:cos(MaxAngleRad),
-    Expected_Az =  9.81 * math:sin(MaxAngleRad),
-
-    Gy >= -MaxGyDegPerSec andalso Gy =< MaxGyDegPerSec andalso
-    Ax >= Expected_Ax - 0.5 andalso Ax =< Expected_Ax + 0.5 andalso
-    Az >= Expected_Az - 0.5 andalso Az =< Expected_Az + 0.5.
