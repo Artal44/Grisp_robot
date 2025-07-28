@@ -26,4 +26,4 @@ LilyGo_software/        - Code for the LoRa32 LilyGO modules (robot ↔ controll
 Wiki_image/             - Media used for documentation
 balancing_robot/        - Core Erlang logic: balance control, PID, Kalman, robot FSM
 electronics/            - Custom PCB design files
-sensor/                 - Erlang drivers for Pmod NAV and SONAR
+
