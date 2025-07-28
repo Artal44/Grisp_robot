@@ -7,3 +7,9 @@
 /Laptop_controller/graphs/*
 /Laptop_controller/graphs
 /Laptop_controller/robot_debug.txt
+/Laptop_controller/graphs/kalman_comparison_split_zoom.pdf
+/Laptop_controller/graphs/kalman_comparison_split.pdf
+/Laptop_controller/graphs/SPEED_data_plot.pdf
+/Laptop_controller/graphs/STABILITY_data_plot.pdf
+
+
