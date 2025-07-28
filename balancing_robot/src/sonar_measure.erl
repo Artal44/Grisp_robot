@@ -56,13 +56,8 @@ round_to(Value, Precision) ->
     round(Value * Factor) / Factor.
 
 filter(New, Prev, Dt) ->
-    Threshold = 60.0,       % cm: max changement autorisé entre deux mesures
     Alpha = compute_alpha(Dt), % pondération dynamique selon Dt
-
-    case New - Prev > Threshold of
-        true -> Prev; 
-        false -> round_to(low_pass_filter(New, Prev, Alpha), 2)
-    end.
+    round_to(low_pass_filter(New, Prev, Alpha), 2).
 
 compute_alpha(Dt) when Dt < 200 -> 0.7;
 compute_alpha(Dt) when Dt < 500 -> 0.5;
