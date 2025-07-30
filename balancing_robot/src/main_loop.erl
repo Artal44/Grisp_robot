@@ -4,7 +4,7 @@
 
 -define(RAD_TO_DEG, 180.0/math:pi()).
 
--define(ADV_V_MAX, 20.0).
+-define(ADV_V_MAX, 16.0).
 -define(TURN_V_MAX, 80.0).
 -define(LOG_INTERVAL, 500). % ms
 
@@ -27,7 +27,7 @@ robot_init() ->
     Pid_Speed = spawn(hera_pid_controller, pid_init, [-0.071, -0.053, 0.0, -1, 15.0, 0.0]), 
     Pid_Stability = spawn(hera_pid_controller, pid_init, [16.3, 0.0, 9.4, -1, -1, 0.0]), 
     persistent_term:put(controllers, {Pid_Speed, Pid_Stability}),
-    persistent_term:put(freq_goal, 250.0),
+    persistent_term:put(freq_goal, 230.0),
 
     T0 = erlang:system_time()/1.0e6,
     log_buffer:add({main_loop, erlang:system_time(millisecond), robot_ready}),
@@ -38,18 +38,15 @@ robot_init() ->
         move_speed => {0.0, 0.0}, % {Adv_V_Ref, Turn_V_Ref}
         frequency => {0, 0, 200.0, T0}, % {N, Freq, Mean_Freq, T_End}
         acc_prev => 0.0, % Acc_Prev
-        sonar => {robot_front_left, 0.0, 0, none}, % {Sonar_Role, T_End_Sonar, Current_Seq, Prev_Dist}
+        sonar => {robot_front_left, 0.0, 0, none, none}, % {Sonar_Role, T_End_Sonar, Current_Seq, Prev_Dist}
         last_log_time => erlang:system_time(millisecond) % LastLog
     },
 
     robot_loop(State).
 
 robot_loop(State) ->
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Map Access %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    {N, Freq, Mean_Freq, T_End} = maps:get(frequency, State),
-    {Tk, Xk, Pk} = maps:get(kalman_state, State),
-
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Dt Computation %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    {Tk, Xk, Pk} = maps:get(kalman_state, State),
     T1 = erlang:system_time()/1.0e6,
     Dt = (T1- Tk)/1000.0,
 
@@ -57,8 +54,12 @@ robot_loop(State) ->
     LastLog = maps:get(last_log_time, State),
     {Robot_State, Robot_Up} = maps:get(robot_state, State),
     {DoLog, New_LastLog}= logging(T1, LastLog),
-    send_to_server(Robot_State),
+    {N, Freq, Mean_Freq, T_End} = maps:get(frequency, State),
     add_log({main_loop, erlang:system_time(millisecond), robot_frequency, [Freq, N, Mean_Freq]}, DoLog),
+
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN LOGIC %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    Acc_Prev = maps:get(acc_prev, State),
+    {Angle, X1, P1} = kalman_message_handling(Xk, Pk, Acc_Prev, Dt, DoLog),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% INPUT FROM I2CBus & CONTROLS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {Speed, CtrlByte} = i2c_read(),
@@ -67,17 +68,13 @@ robot_loop(State) ->
     Turn_V_Goal = turn_ref(Left, Right),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SONAR LOGIC %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    {Sonar_Role, T_End_Sonar, Current_Seq, Prev_Dist} = maps:get(sonar, State),
+    {Sonar_Role, T_End_Sonar, Current_Seq, Prev_Dist, Prev_Direction} = maps:get(sonar, State),
     Sonar_Clock_Now = erlang:monotonic_time(second) + erlang:monotonic_time(microsecond) / 1.0e6,
-    {Sonar_Data, New_Seq} = sonar_message_handling(Current_Seq, Prev_Dist),
-
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN LOGIC %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    Acc_Prev = maps:get(acc_prev, State),
-    {Angle, X1, P1} = kalman_message_handling(Xk, Pk, Acc_Prev, Dt, DoLog),
+    {Sonar_Data, New_Seq, New_Direction} = sonar_message_handling(Current_Seq, Prev_Dist, Prev_Direction),
     
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SET NEW ENGINES COMMANDS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {Adv_V_Ref, Turn_V_Ref} = maps:get(move_speed, State),
-    {Acc, Adv_V_Ref_New, Turn_V_Ref_New} = stability_engine:controller({Dt, Angle, Speed, Sonar_Data}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal, Turn_V_Ref}, DoLog),
+    {Acc, Adv_V_Ref_New, Turn_V_Ref_New} = stability_engine:controller({Dt, Angle, Speed}, {Sonar_Data, New_Direction}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal, Turn_V_Ref}, DoLog),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% NEW ROBOT STATE  & I2CBus WRITE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     Robot_Up_New = is_robot_up(Angle, Robot_Up),
@@ -92,6 +89,9 @@ robot_loop(State) ->
     {N_New, Freq_New, Mean_Freq_New} = frequency_computation(Dt, N, Freq, Mean_Freq),
     maximum_frequency(T1, T_End),
 
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SEND_TO_SERVER %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    send_to_server(Robot_State),
+
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% STATE UPDATE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     T_End_New = erlang:system_time()/1.0e6,
     NewState = State#{
@@ -100,7 +100,7 @@ robot_loop(State) ->
         move_speed => {Adv_V_Ref_New, Turn_V_Ref_New},
         frequency => {N_New, Freq_New, Mean_Freq_New, T_End_New},
         acc_prev => Acc,
-        sonar => {Sonar_Turn_Next, Sonar_Clock_Now, New_Seq, Sonar_Data}, 
+        sonar => {Sonar_Turn_Next, Sonar_Clock_Now, New_Seq, Sonar_Data, New_Direction}, 
         last_log_time => New_LastLog
     },
     robot_loop(NewState).
@@ -111,12 +111,22 @@ robot_loop(State) ->
 
 get_robot_state(Robot_State) -> % {Robot_state, Robot_Up, Get_Up, Arm_ready, Angle} = {Robot_state, stabilité, Get_statique, Arm_ready, Angle}
     case Robot_State of
-        {rest, true, _, _, _} -> dynamic;
+        % From rest
+        {rest, true, _, _, _} -> preparing_dynamic;  % prepare PID, arms up
         {rest, _, _, _, _} -> rest;
-        {dynamic, _, true, _, _} -> static;
+
+        % Transition to dynamic
+        {preparing_dynamic, _, _, _, _} -> dynamic;
+
+        % Dynamic → static
+        {dynamic, _, true, _, _} -> preparing_static;
         {dynamic, false, _, _, _} -> rest;
         {dynamic, _, _, _, _} -> dynamic;
-        {static, _, false, _, _} -> dynamic;
+
+        {preparing_static, _, _, _, _} -> static;
+
+        % Static → dynamic
+        {static, _, false, _, _} -> preparing_dynamic;
         {static, false, _, _, _} -> rest;
         {static, _, _, _, _} -> static
     end.
@@ -124,9 +134,11 @@ get_robot_state(Robot_State) -> % {Robot_state, Robot_Up, Get_Up, Arm_ready, Ang
 get_output_state(State) ->   
     % Output bits = [Power, Freeze, Extend, Robot_Up_Bit, Move_direction, 0, 0, 0]
     case State of 
-        rest      -> get_byte([0, 0, 0, 0, 0, 0, 0, 0]);
-        dynamic   -> get_byte([1, 0, 0, 1, 0, 0, 0, 0]);
-        static    -> get_byte([1, 1, 1, 1, 0, 0, 0, 0])
+        rest               -> get_byte([0,0,0,0,0,0,0,0]);
+        preparing_dynamic  -> get_byte([1,0,0,0,0,0,0,0]); % motors on, arms unlocked
+        dynamic            -> get_byte([1,0,0,1,0,0,0,0]);
+        preparing_static   -> get_byte([1,0,0,1,0,0,0,0]); % arms extending
+        static             -> get_byte([1,1,1,1,0,0,0,0])
     end.
 
 is_robot_up(Angle, Robot_Up) ->
@@ -157,6 +169,7 @@ i2c_read() ->
             {Speed, CtrlByte};
         {error, Reason} ->
             io:format("[ROBOT][I2C ERROR] Error response: ~p~n", [{error, Reason}]),
+            [grisp_led:color(L, red) || L <- [1, 2]],
             timer:sleep(5000),
             i2c_read();
         Other ->
@@ -180,9 +193,9 @@ i2c_write(Acc, Turn_V_Ref_New, Output_Byte) ->
 speed_ref(Forward, Backward) ->
     if
         Forward ->
-            Adv_V_Goal = -?ADV_V_MAX;
-        Backward ->
             Adv_V_Goal = +?ADV_V_MAX;
+        Backward ->
+            Adv_V_Goal = -?ADV_V_MAX;
         true ->
             Adv_V_Goal = 0.0
     end,
@@ -269,11 +282,11 @@ sonar_request(Sonar_Role, T_End_Sonar, Sonar_Clock_Now, Adv_V_Goal) ->
     case (Sonar_Clock_Now - T_End_Sonar > 0.05) of
             true ->
                 case Adv_V_Goal of
-                    V when V < 0 ->
+                    V when V > 0 ->
                         % Recule : on interroge uniquement le sonar arrière
                         persistent_term:get(pid_sonar) ! {authorize, self()},
                         Sonar_Role;
-                    V when V > 0 ->
+                    V when V < 0 ->
                         % Avance : alternance front_left <-> front_right
                         Next_Role = case Sonar_Role of
                             robot_front_left -> robot_front_right;
@@ -288,15 +301,20 @@ sonar_request(Sonar_Role, T_End_Sonar, Sonar_Clock_Now, Adv_V_Goal) ->
             _ -> Sonar_Role
         end.
 
-sonar_message_handling(Current_Seq, Prev_Dist) ->
+sonar_message_handling(Current_Seq, Prev_Dist, Prev_Direction) ->
     receive
         {sonar_data, Sonar_Name, [D, Seq]} ->
             D_M = D / 100.0,
             add_log({main_loop, erlang:system_time(millisecond), new_sonar_measure, [Sonar_Name, D_M]}, true),
-            io:format("[ROBOT][SONAR] Sonar data received: ~p from ~p~n", [D_M, Sonar_Name]),
-            {D_M, Seq}
+            % io:format("[ROBOT][SONAR] Sonar data received: ~p from ~p~n", [D_M, Sonar_Name]),
+            Direction = case Sonar_Name of
+                robot_front_left -> front;
+                robot_front_right -> front;
+                _ -> back
+            end,
+            {D_M, Seq, Direction}
     after 0 ->
-        {Prev_Dist, Current_Seq}
+        {Prev_Dist, Current_Seq, Prev_Direction}
     end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -313,7 +331,7 @@ kalman_message_handling(Xk, Pk, Acc_Prev, Dt, DoLog) ->
             %%%%%%%%%%%%%%%%%%%%%%%%%%%%% MEASURED DIRECT ANGLE  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
             Direct_angle = math:atan(Az / (-Ax)) * ?RAD_TO_DEG,
             add_log({main_loop, erlang:system_time(millisecond), kalman_comparison, [Angle1, Direct_angle]}, DoLog),
-                {Angle1, X1a, P1a}
+            {Angle1, X1a, P1a}
     after 0 ->
         kalman_predict_only(Xk, Pk, Dt, DoLog, Acc_SI) 
     end,

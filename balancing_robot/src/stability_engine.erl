@@ -1,34 +1,48 @@
 -module(stability_engine).
 
--export([controller/4]).
+-export([controller/5]).
 
--define(ADV_V_MAX, 20.0).
+-define(ADV_V_MAX, 16.0).
 -define(ADV_ACCEL, 8.0).
 
 -define(TURN_V_MAX, 80.0).
 -define(TURN_ACCEL, 400.0).
 
 -define(MIN_SONAR_DIST, 0.4).   
--define(MAX_SONAR_DIST, 1.0).   
+-define(MAX_SONAR_DIST, 0.55).   
 
--define(ANGLE_OFFSET, 1.0).
+-define(ANGLE_OFFSET, 0.6).
 
-controller({Dt, Angle, Speed, Sonar_Data}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal, Turn_V_Ref}, DoLog) ->
+controller({Dt, Angle, Speed}, {Sonar_Data, Direction}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal, Turn_V_Ref}, DoLog) ->
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% CONTROLLER %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {Pid_Speed, Pid_Stability} = persistent_term:get(controllers),
 
-     % % Évitement automatique si bloqué
+    % Évitement automatique si bloqué
     Turn_V_Goal_Avoid =
-        case Sonar_Data =< ?MIN_SONAR_DIST andalso Adv_V_Goal > 0.0 of
+        case Sonar_Data =< ?MIN_SONAR_DIST andalso Adv_V_Goal > 0.0  of
             true -> ?TURN_V_MAX;  % tourne à droite (ou -?TURN_V_MAX à gauche)
             false -> Turn_V_Goal
         end,
 
     % Applique un freinage si l’obstacle est détecté
     Adv_V_Goal_Safe =
-        case Sonar_Data < ?MAX_SONAR_DIST of
-            true -> 0.0;
-            false -> Adv_V_Goal
+        case Sonar_Data of 
+            none ->
+                Adv_V_Goal;  % Pas de donnée sonar, on garde la vitesse
+            _ ->
+                case Sonar_Data < ?MAX_SONAR_DIST of
+                    true -> 
+                        case Adv_V_Goal of
+                            V when V < 0.0 andalso Direction =:= front ->
+                                0.0;  % Stop en marche avant
+                            V when V > 0.0 andalso Direction =:= back ->
+                                0.0;  % Stop en marche arrière
+                            _ -> 
+                                Adv_V_Goal
+                        end;
+                    false ->
+                        Adv_V_Goal
+                end
         end,
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% ACCELERATION SATURATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
