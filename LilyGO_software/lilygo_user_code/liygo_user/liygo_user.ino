@@ -59,7 +59,7 @@ void loop(){
 
 void LoRA_sender(){ 
 
-  state = LOW;
+  state = digitalRead(Pin);
 
   if(state==HIGH){
     cmd = cmd & 127;

@@ -24,10 +24,10 @@ robot_init() ->
     persistent_term:put(i2c, I2Cbus),
 
     % PIDs initialization with adjusted gains
-    Pid_Speed = spawn(hera_pid_controller, pid_init, [-0.071, -0.053, 0.0, -1, 15.0, 0.0]), 
+    Pid_Speed = spawn(hera_pid_controller, pid_init, [-0.061, -0.053, 0.0, -1, 15.0, 0.0]), 
     Pid_Stability = spawn(hera_pid_controller, pid_init, [16.3, 0.0, 9.4, -1, -1, 0.0]), 
     persistent_term:put(controllers, {Pid_Speed, Pid_Stability}),
-    persistent_term:put(freq_goal, 230.0),
+    persistent_term:put(freq_goal, 210.0),
 
     T0 = erlang:system_time()/1.0e6,
     log_buffer:add({main_loop, erlang:system_time(millisecond), robot_ready}),
@@ -38,7 +38,7 @@ robot_init() ->
         move_speed => {0.0, 0.0}, % {Adv_V_Ref, Turn_V_Ref}
         frequency => {0, 0, 200.0, T0}, % {N, Freq, Mean_Freq, T_End}
         acc_prev => 0.0, % Acc_Prev
-        sonar => {robot_front_left, 0.0, 0, none, none}, % {Sonar_Role, T_End_Sonar, Current_Seq, Prev_Dist}
+        sonar => {0, none, none}, % {Sonar_Role, T_End_Sonar, Current_Seq, Prev_Dist}
         last_log_time => erlang:system_time(millisecond) % LastLog
     },
 
@@ -65,11 +65,11 @@ robot_loop(State) ->
     {Speed, CtrlByte} = i2c_read(),
     [Arm_Ready, _, _, Get_Up, Forward, Backward, Left, Right] = hera_com:get_bits(CtrlByte),
     Adv_V_Goal = speed_ref(Forward, Backward),
+    ets:insert(adv_goal_tab, {adv_goal, Adv_V_Goal}),
     Turn_V_Goal = turn_ref(Left, Right),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SONAR LOGIC %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    {Sonar_Role, T_End_Sonar, Current_Seq, Prev_Dist, Prev_Direction} = maps:get(sonar, State),
-    Sonar_Clock_Now = erlang:monotonic_time(second) + erlang:monotonic_time(microsecond) / 1.0e6,
+    {Current_Seq, Prev_Dist, Prev_Direction} = maps:get(sonar, State),
     {Sonar_Data, New_Seq, New_Direction} = sonar_message_handling(Current_Seq, Prev_Dist, Prev_Direction),
     
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SET NEW ENGINES COMMANDS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -82,9 +82,6 @@ robot_loop(State) ->
     Output_Byte = get_output_state(Next_Robot_State),
     i2c_write(Acc, Turn_V_Ref_New, Output_Byte),
 
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SONAR REQUEST %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    Sonar_Turn_Next = sonar_request(Sonar_Role, T_End_Sonar, Sonar_Clock_Now, Adv_V_Goal),
-    
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% FREQUENCY STABILISATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {N_New, Freq_New, Mean_Freq_New} = frequency_computation(Dt, N, Freq, Mean_Freq),
     maximum_frequency(T1, T_End),
@@ -100,7 +97,7 @@ robot_loop(State) ->
         move_speed => {Adv_V_Ref_New, Turn_V_Ref_New},
         frequency => {N_New, Freq_New, Mean_Freq_New, T_End_New},
         acc_prev => Acc,
-        sonar => {Sonar_Turn_Next, Sonar_Clock_Now, New_Seq, Sonar_Data, New_Direction}, 
+        sonar => {New_Seq, Sonar_Data, New_Direction}, 
         last_log_time => New_LastLog
     },
     robot_loop(NewState).
@@ -137,7 +134,7 @@ get_output_state(State) ->
         rest               -> get_byte([0,0,0,0,0,0,0,0]);
         preparing_dynamic  -> get_byte([1,0,0,0,0,0,0,0]); % motors on, arms unlocked
         dynamic            -> get_byte([1,0,0,1,0,0,0,0]);
-        preparing_static   -> get_byte([1,0,0,1,0,0,0,0]); % arms extending
+        preparing_static   -> get_byte([1,0,1,1,0,0,0,0]); % arms extending
         static             -> get_byte([1,1,1,1,0,0,0,0])
     end.
 
@@ -277,29 +274,6 @@ send_to_server(Robot_State) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SONAR %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-sonar_request(Sonar_Role, T_End_Sonar, Sonar_Clock_Now, Adv_V_Goal) ->
-    case (Sonar_Clock_Now - T_End_Sonar > 0.05) of
-            true ->
-                case Adv_V_Goal of
-                    V when V > 0 ->
-                        % Recule : on interroge uniquement le sonar arrière
-                        persistent_term:get(pid_sonar) ! {authorize, self()},
-                        Sonar_Role;
-                    V when V < 0 ->
-                        % Avance : alternance front_left <-> front_right
-                        Next_Role = case Sonar_Role of
-                            robot_front_left -> robot_front_right;
-                            robot_front_right -> robot_front_left
-                        end,
-                        hera_com:send_unicast(Next_Role, "authorize", "UTF8"),
-                        Next_Role;
-                    _ ->
-                        % À l’arrêt : ne change pas
-                        Sonar_Role
-                end;
-            _ -> Sonar_Role
-        end.
 
 sonar_message_handling(Current_Seq, Prev_Dist, Prev_Direction) ->
     receive

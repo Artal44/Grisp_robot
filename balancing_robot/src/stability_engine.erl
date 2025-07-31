@@ -19,7 +19,7 @@ controller({Dt, Angle, Speed}, {Sonar_Data, Direction}, {Adv_V_Goal, Adv_V_Ref},
 
     % Évitement automatique si bloqué
     Turn_V_Goal_Avoid =
-        case Sonar_Data =< ?MIN_SONAR_DIST andalso Adv_V_Goal > 0.0  of
+        case Sonar_Data =< ?MIN_SONAR_DIST andalso (Adv_V_Goal > 0 orelse Adv_V_Goal < 0) of
             true -> ?TURN_V_MAX;  % tourne à droite (ou -?TURN_V_MAX à gauche)
             false -> Turn_V_Goal
         end,

@@ -36,6 +36,13 @@ start(_Type, _Args) ->
     {ok, Supervisor}.
 
 stop(_State) ->
+    persistent_term:get(name),
+    case persistent_term:get(name) of
+        robot_main ->
+            ets:delete(adv_goal_tab);
+        _ ->
+            ok
+    end,
     dump_logs(),
     ok.
 
@@ -50,6 +57,10 @@ init_grisp(0) ->
     io:format("[BALANCING_ROBOT] GRiSP ID: 0, Spawning robot_main~n", []),
     persistent_term:put(name, robot_main),
 
+    %% Initialize ETS table for adv_goal
+    ets:new(adv_goal_tab, [set, public, named_table]),
+    ets:insert(adv_goal_tab, {adv_goal, 0.0}),
+
     add_GRISP_device(spi2, pmod_nav),
     add_GRISP_device(uart, pmod_maxsonar),
     pmod_nav:config(acc, #{odr_g => {hz,238}}),
@@ -58,6 +69,9 @@ init_grisp(0) ->
     log_buffer:add({balancing_robot, erlang:system_time(millisecond), robot_main}),
     Pid_Main = spawn(main_loop, robot_init, []),
     persistent_term:put(pid_main, Pid_Main),
+    
+    %% Start sonar scheduler
+    start_sonar_scheduler(), 
 
     spawning_sonar(0, robot_main),
     hera:start_measure(nav_measure, [Pid_Main, robot_main]);
@@ -86,7 +100,6 @@ add_GRISP_device(Port, Name) ->
     case catch grisp:add_device(Port, Name) of
         {device, _, _, _, _} = DeviceInfo ->
             [grisp_led:flash(L, yellow, 250) || L <- [1, 2]],
-
             io:format("[~p] Device ~p added (info: ~p)~n",
                       [persistent_term:get(name), Name, DeviceInfo]);
         Other ->
@@ -167,6 +180,7 @@ alive_loop() ->
 hera_notify_loop() ->
     receive
         {hera_notify, Msg} ->
+            io:format("[~p] Received hera_notify: ~p~n", [persistent_term:get(name), Msg]),
             handle_hera_notify(Msg),
             hera_notify_loop();
         Other ->
@@ -202,4 +216,38 @@ add_device(Name, SIp, SPort) ->
             hera_com:add_device(OName, Ip, list_to_integer(SPort)),
             io:format("[BALANCING_ROBOT] Added device ~p (IP: ~p, Port: ~p)~n",
                       [OName, Ip, SPort])
+    end.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% SONAR SCHEDULER
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+start_sonar_scheduler() ->
+    spawn(fun sonar_scheduler/0).
+
+sonar_scheduler() ->
+    receive
+        after 50 -> % run every 50 ms
+            [{adv_goal, Adv_V_Goal}] = ets:lookup(adv_goal_tab, adv_goal),
+            handle_sonar_authorization(Adv_V_Goal),
+            sonar_scheduler()
+    end.
+
+handle_sonar_authorization(Adv_V_Goal) ->
+    case Adv_V_Goal of
+        V when V > 0 ->
+            % Recule : only back sonar
+            persistent_term:get(pid_sonar) ! {authorize, persistent_term:get(pid_main)};
+        V when V < 0 ->
+            % Avance : alternate front_left / front_right
+            Sonar_Role = persistent_term:get(current_sonar, robot_front_left),
+            Next_Role = case Sonar_Role of
+                robot_front_left  -> robot_front_right;
+                robot_front_right -> robot_front_left
+            end,
+            persistent_term:put(current_sonar, Next_Role),
+            spawn(fun() ->
+                hera_com:send_unicast(Next_Role, "authorize", "UTF8")
+            end);
+        _ -> ok
     end.

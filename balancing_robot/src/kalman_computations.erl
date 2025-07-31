@@ -6,7 +6,7 @@
 -define(DEG_TO_RAD, math:pi()/180.0).
 
 -define(g, 9.81). % Gravity in m/s²
--define(M, 5). % Mass of the robot (kg)
+-define(M, 5.3). % Mass of the robot (kg)
 -define(h, 0.41). % Height of the robot center of mass (m)
 % Poid en haut -> un metre de g
 -define(width, 0.185). % Width of the robot (m)
