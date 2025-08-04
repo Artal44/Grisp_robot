@@ -46,8 +46,7 @@ init_kalman() ->
     G = ?g,
     Hh = ?h + (?I / (?M * ?h)),
 
-    Jh = fun (_) -> mat:matrix([[1, 0], [0, 1]]) end,
-    persistent_term:put(kalman_constant, {R, Q, Jh, G, Hh}),
+    persistent_term:put(kalman_constant, {R, Q, G, Hh}),
 
     % Initial State and Covariance matrices
     {Initial_Angle, Initial_Angular_Velocity} = calibrate_initial_state(),
@@ -60,7 +59,7 @@ init_kalman() ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 update_with_measurement(Gy, Ax, Az, [Xk, Pk]) ->
-    {R, _Q, Jh, _G, _Hh} = persistent_term:get(kalman_constant),
+    {R, _Q, _G, _Hh} = persistent_term:get(kalman_constant),
     H = fun (X) -> [Th, W] = mat:to_array(X), mat:matrix([[Th], [W]]) end,
     Z = mat:matrix([[math:atan(Az / (-Ax))], [(Gy - persistent_term:get(gy0)) * ?DEG_TO_RAD]]),
     {X1, P1} = hera_kalman:ekf_correct({Xk, Pk}, H, Jh, R, Z),
@@ -69,7 +68,7 @@ update_with_measurement(Gy, Ax, Az, [Xk, Pk]) ->
     [Angle, {X1, P1}].
 
 kalman_predict_only(Dt, [Xk, Pk], Acc) ->
-    {_R, Q, _Jh, G, Hh} = persistent_term:get(kalman_constant),
+    {_R, Q, G, Hh} = persistent_term:get(kalman_constant),
     F = fun (X, U) ->
         [Th, W] = mat:to_array(X),
         Th1 = Th + W * Dt,
@@ -87,8 +86,10 @@ kalman_predict_only(Dt, [Xk, Pk], Acc) ->
     [Angle, {X1, P1}].
 
 kalman_angle(Dt, Ax, Az, Gy, Acc, X0, P0) ->
-    {R, Q, Jh, G, Hh} = persistent_term:get(kalman_constant),
-    
+    {R, Q, G, Hh} = persistent_term:get(kalman_constant),
+    R_IMU = 0.5,  % Distance from wheel axis to IMU 
+    Gy0 = persistent_term:get(gy0),
+	
     % Nonlinear state model (digital twin)
     F = fun (X, U) ->
         [Th, W] = mat:to_array(X),
@@ -105,15 +106,39 @@ kalman_angle(Dt, Ax, Az, Gy, Acc, X0, P0) ->
                     [DW_dTh, 1]])
     end,
 
-    % Observation function
-    H = fun (X) ->
+    %% Measurement function h(x, u)
+    H = fun(X, U) ->
         [Th, W] = mat:to_array(X),
-        mat:matrix([[Th], [W]])
+        Ax_hat = U * math:cos(Th) +
+                 ((G * math:sin(Th) - U * math:cos(Th)) / Hh) * R_IMU +
+                 G * math:sin(Th),
+        Az_hat = U * math:sin(Th) -
+                 math:pow(W, 2) * R_IMU -
+                 G * math:cos(Th),
+        W_hat = W,
+        mat:matrix([[Ax_hat], [Az_hat], [W_hat]])
     end,
+
+    %% Jacobian Jh(x,u)
+    Jh = fun(X, U) ->
+        [Th, W] = mat:to_array(X),
+        Jh11 = (-U * math:sin(Th) + (G * math:cos(Th) + U * math:sin(Th)) / C) * R_IMU + G * math:cos(Th),
+        Jh21 = U * math:cos(Th) + G * math:sin(Th),
+        Jh22 = -2 * W * R_IMU,
+        mat:matrix([
+            [Jh11,     0],
+            [Jh21,  Jh22],
+            [   0,     1]
+        ])
+    end,
+
+    %% Apply closure to inject control input (Acc)
+    H1 = fun(X) -> H(X, Acc) end,
+    Jh1 = fun(X) -> Jh(X, Acc) end,
 
     % Measurement vector: angle from accelerometer, angular velocity from gyro
     Z = mat:matrix([[math:atan(Az / (-Ax))], [(Gy - persistent_term:get(gy0)) * ?DEG_TO_RAD]]),
-    {X1, P1} = hera_kalman:ekf_control({X0, P0}, {F, Jf}, {H, Jh}, Q, R, Z, Acc),
+    {X1, P1} = hera_kalman:ekf_control({X0, P0}, {F, Jf}, {H1, Jh1}, Q, R, Z, Acc),
 
     [Th_Kalman, _W_Kalman] = mat:to_array(X1),
     Angle = Th_Kalman * ?RAD_TO_DEG,
