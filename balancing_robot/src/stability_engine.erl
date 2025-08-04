@@ -8,7 +8,7 @@
 -define(TURN_V_MAX, 80.0).
 -define(TURN_ACCEL, 400.0).
 
--define(MIN_SONAR_DIST, 0.4).   
+-define(MIN_SONAR_DIST, 0.35).   
 -define(MAX_SONAR_DIST, 0.55).   
 
 -define(ANGLE_OFFSET, 0.6).
