@@ -10,6 +10,7 @@
 -define(h, 0.41). % Height of the robot center of mass (m)
 % Poid en haut -> un metre de g
 -define(width, 0.185). % Width of the robot (m)
+-define(r, 0.82) % distance sensors to axls wheels (m)
 -define(height, 0.95). % Height of the robot (m)
 -define(I, ?M * (math:pow(?width, 2) + math:pow(?height, 2)) / 12). % I = M * (w² + h²) / 12 (rectangular parallelepiped)
 
@@ -39,13 +40,12 @@ calibrate_initial_state() ->
 
 init_kalman() ->
     % Adjusted Kalman constants
-    R = mat:matrix([[3.0, 0.0], [0, 3.0e-6]]),
+    R = mat:matrix([[3.0, 0.0, 0.0], [0.0, 3.0, 0.0], [0.0, 0.0, 3.0e-6]]),
     Q = mat:matrix([[1.0e-6, 0.0], [0.0, 2.5]]),
 
     % Model constants
     G = ?g,
     Hh = ?h + (?I / (?M * ?h)),
-
     persistent_term:put(kalman_constant, {R, Q, G, Hh}),
 
     % Initial State and Covariance matrices
@@ -61,7 +61,7 @@ init_kalman() ->
 update_with_measurement(Gy, Ax, Az, [Xk, Pk]) ->
     {R, _Q, _G, _Hh} = persistent_term:get(kalman_constant),
     H = fun (X) -> [Th, W] = mat:to_array(X), mat:matrix([[Th], [W]]) end,
-    Z = mat:matrix([[math:atan(Az / (-Ax))], [(Gy - persistent_term:get(gy0)) * ?DEG_TO_RAD]]),
+    Z = mat:matrix([Ax], [Az], [(Gy - persistent_term:get(gy0)) * ?DEG_TO_RAD]]),
     {X1, P1} = hera_kalman:ekf_correct({Xk, Pk}, H, Jh, R, Z),
     [Th_Kalman, _] = mat:to_array(X1),
     Angle = Th_Kalman * ?RAD_TO_DEG,
@@ -87,7 +87,7 @@ kalman_predict_only(Dt, [Xk, Pk], Acc) ->
 
 kalman_angle(Dt, Ax, Az, Gy, Acc, X0, P0) ->
     {R, Q, G, Hh} = persistent_term:get(kalman_constant),
-    R_IMU = 0.5,  % Distance from wheel axis to IMU 
+    R_IMU = 0.82,  % Distance from wheel axis to IMU 
     Gy0 = persistent_term:get(gy0),
 	
     % Nonlinear state model (digital twin)
@@ -137,7 +137,7 @@ kalman_angle(Dt, Ax, Az, Gy, Acc, X0, P0) ->
     Jh1 = fun(X) -> Jh(X, Acc) end,
 
     % Measurement vector: angle from accelerometer, angular velocity from gyro
-    Z = mat:matrix([[math:atan(Az / (-Ax))], [(Gy - persistent_term:get(gy0)) * ?DEG_TO_RAD]]),
+    Z = mat:matrix([Ax], [Az], [(Gy - persistent_term:get(gy0)) * ?DEG_TO_RAD]]),
     {X1, P1} = hera_kalman:ekf_control({X0, P0}, {F, Jf}, {H1, Jh1}, Q, R, Z, Acc),
 
     [Th_Kalman, _W_Kalman] = mat:to_array(X1),
