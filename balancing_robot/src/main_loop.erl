@@ -308,30 +308,6 @@ send_to_server(Robot_State) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SONAR %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-sonar_request(Sonar_Role, T_End_Sonar, Sonar_Clock_Now, Adv_V_Goal) ->
-    case (Sonar_Clock_Now - T_End_Sonar > 0.05) of
-            true ->
-                case Adv_V_Goal of
-                    V when V > 0 ->
-                        % Recule : on interroge uniquement le sonar arrière
-                        persistent_term:get(pid_sonar) ! {authorize, self()},
-                        Sonar_Role;
-                    V when V < 0 ->
-                        % Avance : alternance front_left <-> front_right
-                        Next_Role = case Sonar_Role of
-                            robot_front_left -> robot_front_right;
-                            robot_front_right -> robot_front_left
-                        end,
-                        hera_com:send_unicast(Next_Role, "authorize", "UTF8"),
-                        Next_Role;
-                    _ ->
-                        % À l’arrêt : ne change pas
-                        Sonar_Role
-                end;
-            _ -> Sonar_Role
-        end.
-
 sonar_message_handling(Current_Seq, Prev_Dist, Prev_Direction) ->
     receive
         {sonar_data, Sonar_Name, [D, Seq]} ->
