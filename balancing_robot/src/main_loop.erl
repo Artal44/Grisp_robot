@@ -143,7 +143,6 @@ robot_loop(State) ->
 get_robot_state(Robot_State) -> % {Robot_state, Robot_Up, Get_Up, Arm_ready, Angle} = {Robot_state, stabilité, Get_statique, Arm_ready, Angle}
     case Robot_State of
         % From rest
-        {rest, true, _, _, _} -> preparing_dynamic;  % prepare PID, arms up
         {rest, _, _, _, _} -> rest;
 
         % Transition to dynamic
@@ -157,7 +156,6 @@ get_robot_state(Robot_State) -> % {Robot_state, Robot_Up, Get_Up, Arm_ready, Ang
         {preparing_static, _, _, _, _} -> static;
 
         % Static → dynamic
-        {static, _, false, _, _} -> preparing_dynamic;
         {static, false, _, _, _} -> rest;
         {static, _, _, _, _} -> static
     end.
@@ -166,7 +164,6 @@ get_output_state(State) ->
     % Output bits = [Power, Freeze, Extend, Robot_Up_Bit, Move_direction, 0, 0, 0]
     case State of 
         rest               -> get_byte([0,0,0,0,0,0,0,0]);
-        preparing_dynamic  -> get_byte([1,0,0,0,0,0,0,0]); % motors on, arms unlocked
         dynamic            -> get_byte([1,0,0,1,0,0,0,0]);
         preparing_static   -> get_byte([1,0,1,1,0,0,0,0]); % arms extending
         static             -> get_byte([1,1,1,1,0,0,0,0])
