@@ -144,20 +144,19 @@ get_robot_state(Robot_State) -> % {Robot_state, Robot_Up, Get_Up, Arm_ready, Ang
     case Robot_State of
         % From rest
         {rest, _, _, _, _} -> rest;
-
-        % Transition to dynamic
-        {preparing_dynamic, _, _, _, _} -> dynamic;
+	{rest, true, _, _, _} -> dynamic;
 
         % Dynamic → static
         {dynamic, _, true, _, _} -> preparing_static;
         {dynamic, false, _, _, _} -> rest;
         {dynamic, _, _, _, _} -> dynamic;
 
-        {preparing_static, _, _, _, _} -> static;
+        {preparing_static, _, _, true, _} -> static;
 
         % Static → dynamic
         {static, false, _, _, _} -> rest;
-        {static, _, _, _, _} -> static
+        {static, _, _, _, _} -> static;
+        {static, _, false, _, _} -> dynamic
     end.
 
 get_output_state(State) ->   
