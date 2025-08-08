@@ -123,7 +123,7 @@ void GRiSP_receiver(int howMany) {
       set_acceleration(I2C_command[0], I2C_command[0]);
     }
 
-    // Free fall, null wheel speed
+    // Freeze
     if(bitRead(GRiSP_flags, 6)){ 
       set_acceleration(0, 0);
       set_speed(0, 0);
@@ -131,17 +131,11 @@ void GRiSP_receiver(int howMany) {
 
     // extension/retraction of the rising system
     if(bitRead(GRiSP_flags, 5)){
-      ext_end = stand(-48,30.0);
+      ext_end = stand(-30,30.0);
     } else {
       ext_end = stand(0,30.0);
     }
-
-    // wheel counter rotation activation and direction selection during rise
-    int stand_speed_dir = 0;
-    if(!bitRead(GRiSP_flags, 4)){ // if down
-      stand_speed_dir = (bitRead(GRiSP_flags, 3)) ? -1 : 1;
-    }
-    raise_dir(stand_speed_dir); // -1 back, 0 null, 1 front
+    
   }
 
   // Empty the stack

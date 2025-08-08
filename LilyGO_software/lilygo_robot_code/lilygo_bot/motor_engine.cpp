@@ -20,10 +20,7 @@ float v_MA = 0;
 float v_MB = 0;
 float v_MC = 0;
 
-// wheel counter rotation speed during rise, rot/sec
-float v_MA_rise = 0;
-float v_MC_rise= 0;
-int wheel_raise_dir = 0;
+
 
 // Total wheel speed
 float v_tot_A = 0;
@@ -194,16 +191,12 @@ void engine_update(unsigned long dt_loop) {
   //and the wheel counter rotation 
   if (total_stepB > target_step){
     v_MB = Speed_stand / lever_ratio;
-    v_MA_rise = Speed_stand * wheel_raise_dir;
-    v_MC_rise = Speed_stand * wheel_raise_dir;
+  
   } else if (total_stepB < target_step){
     v_MB = -Speed_stand / lever_ratio;
-    v_MA_rise = -Speed_stand * wheel_raise_dir;
-    v_MC_rise = -Speed_stand  * wheel_raise_dir;
+    
   } else {
     v_MB = 0;
-    v_MA_rise = 0;
-    v_MC_rise = 0;
   }
   
   //acceleration calculation of motor A with limit to +/- vmax
@@ -215,9 +208,9 @@ void engine_update(unsigned long dt_loop) {
   }
   
   //total speeds 
-  v_tot_A = v_MA + v_diff + v_MA_rise;
+  v_tot_A = v_MA + v_diff;
   v_tot_B = v_MB;
-  v_tot_C = v_MC - v_diff + v_MC_rise;
+  v_tot_C = v_MC - v_diff;
 
 
   //compute freq from speed
@@ -290,9 +283,6 @@ bool stand(float angle, float speed){
   return total_stepB == target_step;
 }
 
-void raise_dir(int dir){ // Use to specify the wheel counter rotation direction during raise/fall 
-  wheel_raise_dir = dir;
-}
 
 bool is_ready(){
   return total_stepB == target_step;
