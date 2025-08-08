@@ -24,7 +24,7 @@ robot_init() ->
     persistent_term:put(i2c, I2Cbus),
 
     % PIDs initialization with adjusted gains
-    Pid_Speed = spawn(hera_pid_controller, pid_init, [-0.061, -0.053, 0.0, -1, 15.0, 0.0]), 
+    Pid_Speed = spawn(hera_pid_controller, pid_init, [-0.041, -0.05, 0.0, -1, 15.0, 0.0]), 
     Pid_Stability = spawn(hera_pid_controller, pid_init, [16.3, 0.0, 9.4, -1, -1, 0.0]), 
     persistent_term:put(controllers, {Pid_Speed, Pid_Stability}),
     persistent_term:put(freq_goal, 210.0),
@@ -308,30 +308,6 @@ send_to_server(Robot_State) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SONAR %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-sonar_request(Sonar_Role, T_End_Sonar, Sonar_Clock_Now, Adv_V_Goal) ->
-    case (Sonar_Clock_Now - T_End_Sonar > 0.05) of
-            true ->
-                case Adv_V_Goal of
-                    V when V > 0 ->
-                        % Recule : on interroge uniquement le sonar arrière
-                        persistent_term:get(pid_sonar) ! {authorize, self()},
-                        Sonar_Role;
-                    V when V < 0 ->
-                        % Avance : alternance front_left <-> front_right
-                        Next_Role = case Sonar_Role of
-                            robot_front_left -> robot_front_right;
-                            robot_front_right -> robot_front_left
-                        end,
-                        hera_com:send_unicast(Next_Role, "authorize", "UTF8"),
-                        Next_Role;
-                    _ ->
-                        % À l’arrêt : ne change pas
-                        Sonar_Role
-                end;
-            _ -> Sonar_Role
-        end.
-
 sonar_message_handling(Current_Seq, Prev_Dist, Prev_Direction) ->
     receive
         {sonar_data, Sonar_Name, [D, Seq]} ->

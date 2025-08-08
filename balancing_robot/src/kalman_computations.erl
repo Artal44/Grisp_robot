@@ -1,6 +1,6 @@
 -module(kalman_computations).
 
--export([init_kalman/0, old_init_kalman/0, update_with_measurement/4, old_kalman_angle/6, kalman_predict_only/3, kalman_angle/7]).
+-export([init_kalman/0, old_init_kalman/0, old_kalman_angle/6, kalman_predict_only/3, kalman_angle/7]).
 
 -define(RAD_TO_DEG, 180.0/math:pi()).
 -define(DEG_TO_RAD, math:pi()/180.0).
@@ -10,7 +10,7 @@
 -define(h, 0.41). % Height of the robot center of mass (m)
 % Poid en haut -> un metre de g
 -define(width, 0.185). % Width of the robot (m)
--define(r, 0.82) % distance sensors to axls wheels (m)
+-define(r, 0.82). % distance sensors to axls wheels (m)
 -define(height, 0.95). % Height of the robot (m)
 -define(I, ?M * (math:pow(?width, 2) + math:pow(?height, 2)) / 12). % I = M * (w² + h²) / 12 (rectangular parallelepiped)
 
@@ -40,8 +40,8 @@ calibrate_initial_state() ->
 
 init_kalman() ->
     % Adjusted Kalman constants
-    R = mat:matrix([[3.0, 0.0, 0.0], [0.0, 3.0, 0.0], [0.0, 0.0, 3.0e-6]]),
-    Q = mat:matrix([[1.0e-6, 0.0], [0.0, 2.5]]),
+    R = mat:matrix([[0.8, 0.0, 0.0], [0.0, 0.8, 0.0], [0.0, 0.0, 0.002]]),
+    Q = mat:matrix([[1.0e-4, 0.0], [0.0, 0.3]]),
 
     % Model constants
     G = ?g,
@@ -57,15 +57,6 @@ init_kalman() ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN COMPUTATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-update_with_measurement(Gy, Ax, Az, [Xk, Pk]) ->
-    {R, _Q, _G, _Hh} = persistent_term:get(kalman_constant),
-    H = fun (X) -> [Th, W] = mat:to_array(X), mat:matrix([[Th], [W]]) end,
-    Z = mat:matrix([Ax], [Az], [(Gy - persistent_term:get(gy0)) * ?DEG_TO_RAD]]),
-    {X1, P1} = hera_kalman:ekf_correct({Xk, Pk}, H, Jh, R, Z),
-    [Th_Kalman, _] = mat:to_array(X1),
-    Angle = Th_Kalman * ?RAD_TO_DEG,
-    [Angle, {X1, P1}].
 
 kalman_predict_only(Dt, [Xk, Pk], Acc) ->
     {_R, Q, G, Hh} = persistent_term:get(kalman_constant),
@@ -87,9 +78,9 @@ kalman_predict_only(Dt, [Xk, Pk], Acc) ->
 
 kalman_angle(Dt, Ax, Az, Gy, Acc, X0, P0) ->
     {R, Q, G, Hh} = persistent_term:get(kalman_constant),
-    R_IMU = 0.82,  % Distance from wheel axis to IMU 
     Gy0 = persistent_term:get(gy0),
-	
+    R_IMU = 0.82,  % Distance from wheel axis to IMU 
+
     % Nonlinear state model (digital twin)
     F = fun (X, U) ->
         [Th, W] = mat:to_array(X),
@@ -122,7 +113,7 @@ kalman_angle(Dt, Ax, Az, Gy, Acc, X0, P0) ->
     %% Jacobian Jh(x,u)
     Jh = fun(X, U) ->
         [Th, W] = mat:to_array(X),
-        Jh11 = (-U * math:sin(Th) + (G * math:cos(Th) + U * math:sin(Th)) / C) * R_IMU + G * math:cos(Th),
+        Jh11 = (-U * math:sin(Th) + (G * math:cos(Th) + U * math:sin(Th)) / Hh) * R_IMU + G * math:cos(Th),
         Jh21 = U * math:cos(Th) + G * math:sin(Th),
         Jh22 = -2 * W * R_IMU,
         mat:matrix([
@@ -136,13 +127,14 @@ kalman_angle(Dt, Ax, Az, Gy, Acc, X0, P0) ->
     H1 = fun(X) -> H(X, Acc) end,
     Jh1 = fun(X) -> Jh(X, Acc) end,
 
-    % Measurement vector: angle from accelerometer, angular velocity from gyro
-    Z = mat:matrix([Ax], [Az], [(Gy - persistent_term:get(gy0)) * ?DEG_TO_RAD]]),
+    % Measurement vector: acceleration and angular velocity
+    Z = mat:matrix([[float(Ax)], [float(Az)], [float((Gy - Gy0) * ?DEG_TO_RAD)]]),
     {X1, P1} = hera_kalman:ekf_control({X0, P0}, {F, Jf}, {H1, Jh1}, Q, R, Z, Acc),
 
     [Th_Kalman, _W_Kalman] = mat:to_array(X1),
     Angle = Th_Kalman * ?RAD_TO_DEG,
     [Angle, {X1, P1}].
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% OLD KALMAN COMPUTATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

@@ -86,5 +86,5 @@ for ctrl in df['Controller'].unique():
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig(f'./graphs/{ctrl}_data_plot.pdf')
+    plt.savefig(f'./graphs/controllers/{ctrl}_data_plot.pdf')
     plt.close()

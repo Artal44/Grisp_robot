@@ -44,7 +44,7 @@ plt.title('NEW Kalman vs Measured')
 plt.legend()
 plt.grid(True, linestyle=':', linewidth=0.6, alpha=0.7)
 plt.tight_layout()
-plt.savefig('./graphs/kalman_comparison_split.pdf', bbox_inches='tight')
+plt.savefig('./graphs/kalman/kalman_comparison_split.pdf', bbox_inches='tight')
 
 # === Graphique zoomé en Y ===
 plt.figure(figsize=(12, 6))
@@ -57,7 +57,7 @@ plt.ylim([-5, 5])
 plt.legend()
 plt.grid(True, linestyle=':', linewidth=0.6, alpha=0.7)
 plt.tight_layout()
-plt.savefig('./graphs/kalman_comparison_split_zoom.pdf', bbox_inches='tight')
+plt.savefig('./graphs/kalman/kalman_comparison_split_zoom.pdf', bbox_inches='tight')
 
 rmse_new = np.sqrt(np.mean((np.array(kalman_new) - np.array(measured))**2)) if kalman_new else 0.0
 print(f"NEW Kalman RMSE: {rmse_new:.2f}°")
