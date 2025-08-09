@@ -13,7 +13,7 @@ While the original project focused on building a self-balancing robot, this thes
 - integrates **obstacle avoidance**,
 - is driven by a **GRiSP2 board** and **Hera framework** using sensor fusion (Kalman + PID).
 
-The system is implemented in **Erlang/OTP 27.2.4**, and leverages fault-tolerant patterns using OTP supervisors. For details on the Hera platform, see [hera](https://github.com/stritzinger/hera).
+The system is implemented in **Erlang/OTP 27.2.4**, and leverages fault-tolerant patterns using OTP supervisors. For details on the Hera platform, see [hera](https://github.com/Artal44/hera).
 
 ---
 
