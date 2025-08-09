@@ -2,11 +2,11 @@
 
 -export([controller/5]).
 
--define(ADV_V_MAX, 16.0).
+-define(ADV_V_MAX, 32.0).
 -define(ADV_ACCEL, 8.0).
 
--define(TURN_V_MAX, 40.0).
--define(TURN_ACCEL, 200.0).
+-define(TURN_V_MAX, 80.0).
+-define(TURN_ACCEL, 400.0).
 
 -define(MIN_SONAR_DIST, 0.35).   
 -define(MAX_SONAR_DIST, 0.55).   
@@ -20,7 +20,7 @@ controller({Dt, Angle, Speed}, {Sonar_Data, Direction}, {Adv_V_Goal, Adv_V_Ref},
     % Évitement automatique si bloqué
     Turn_V_Goal_Avoid =
         case Sonar_Data =< ?MIN_SONAR_DIST andalso (Adv_V_Goal > 0 orelse Adv_V_Goal < 0) of
-            true -> ?TURN_V_MAX + 20;  % tourne à droite (ou -?TURN_V_MAX à gauche)
+            true -> ?TURN_V_MAX;  % tourne à droite (ou -?TURN_V_MAX à gauche)
             false -> Turn_V_Goal
         end,
 
