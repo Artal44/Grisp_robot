@@ -124,16 +124,16 @@ void GRiSP_receiver(int howMany) {
     }
 
     // Freeze
-    if(bitRead(GRiSP_flags, 6)){ 
-      set_acceleration(0, 0);
-      set_speed(0, 0);
+    if (bitRead(GRiSP_flags, 6)) { 
+        set_acceleration(0, 0);
+        set_speed(0, 0);
     }
 
     // extension/retraction of the rising system
     if(bitRead(GRiSP_flags, 5)){
-      ext_end = stand(-30,30.0);
+      ext_end = stand(-30,60.0);
     } else {
-      ext_end = stand(0,30.0);
+      ext_end = stand(0,60.0);
     }
     
   }

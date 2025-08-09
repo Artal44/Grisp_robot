@@ -20,7 +20,7 @@ controller({Dt, Angle, Speed}, {Sonar_Data, Direction}, {Adv_V_Goal, Adv_V_Ref},
     % Évitement automatique si bloqué
     Turn_V_Goal_Avoid =
         case Sonar_Data =< ?MIN_SONAR_DIST andalso (Adv_V_Goal > 0 orelse Adv_V_Goal < 0) of
-            true -> ?TURN_V_MAX;  % tourne à droite (ou -?TURN_V_MAX à gauche)
+            true -> ?TURN_V_MAX + 20;  % tourne à droite (ou -?TURN_V_MAX à gauche)
             false -> Turn_V_Goal
         end,
 
@@ -62,7 +62,7 @@ controller({Dt, Angle, Speed}, {Sonar_Data, Direction}, {Adv_V_Goal, Adv_V_Ref},
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% LOGGING %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     add_log({controller, erlang:system_time(millisecond), speed_controller, [Adv_V_Ref_New, Speed, Target_Angle]}, DoLog),
-    add_log({controller, erlang:system_time(millisecond), stability_controller, [Target_Angle, Angle, Acc]}, DoLog),
+    add_log({controller, erlang:system_time(millisecond), stability_controller, [Target_Angle, Corrected_Angle, Acc]}, DoLog),
     
     {Acc, Adv_V_Ref_New, Turn_V_Ref_New}.
 
