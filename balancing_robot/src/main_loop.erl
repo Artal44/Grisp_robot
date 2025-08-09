@@ -5,7 +5,7 @@
 -define(RAD_TO_DEG, 180.0/math:pi()).
 
 -define(ADV_V_MAX, 16.0).
--define(TURN_V_MAX, 80.0).
+-define(TURN_V_MAX, 40.0).
 -define(LOG_INTERVAL, 500). % ms
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -24,10 +24,10 @@ robot_init() ->
     persistent_term:put(i2c, I2Cbus),
 
     % PIDs initialization with adjusted gains
-    Pid_Speed = spawn(hera_pid_controller, pid_init, [-0.061, -0.053, 0.0, -1, 15.0, 0.0]), 
+    Pid_Speed = spawn(hera_pid_controller, pid_init, [-0.0635, -0.053, 0.0, -1, 15.0, 0.0]), 
     Pid_Stability = spawn(hera_pid_controller, pid_init, [16.3, 0.0, 9.4, -1, -1, 0.0]), 
     persistent_term:put(controllers, {Pid_Speed, Pid_Stability}),
-    persistent_term:put(freq_goal, 210.0),
+    persistent_term:put(freq_goal, 220.0),
 
     T0 = erlang:system_time()/1.0e6,
     log_buffer:add({main_loop, erlang:system_time(millisecond), robot_ready}),
@@ -139,24 +139,26 @@ robot_loop(State) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% ROBOT STATE LOGIC %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-get_robot_state(Robot_State) -> % {Robot_state, Robot_Up, Get_Up, Arm_ready, Angle} = {Robot_state, stabilité, Get_statique, Arm_ready, Angle}
+get_robot_state(Robot_State) -> % {Robot_state, Robot_Up, Get_Up, Arm_ready, Angle}
     case Robot_State of
         % From rest
+        {rest, true, _, _, _} -> dynamic;
         {rest, _, _, _, _} -> rest;
-	{rest, true, _, _, _} -> dynamic;
 
         % Dynamic → static
         {dynamic, _, true, _, _} -> preparing_static;
         {dynamic, false, _, _, _} -> rest;
         {dynamic, _, _, _, _} -> dynamic;
 
+        % Preparing static → static
         {preparing_static, _, _, true, _} -> static;
+        {preparing_static, _, _, false, _} -> dynamic;
+        {preparing_static, _, _, _, _} -> preparing_static;
 
         % Static → dynamic
         {static, false, _, _, _} -> rest;
-        {static, _, _, _, _} -> static;
-        {static, _, false, _, _} -> dynamic
+        {static, _, false, _, _} -> dynamic;
+        {static, _, _, _, _} -> static
     end.
 
 get_output_state(State) ->   
