@@ -7,7 +7,7 @@
 
 -define(ADV_V_MAX, 24.0).
 -define(TURN_V_MAX, 80.0).
--define(LOG_INTERVAL, 500). % ms
+-define(LOG_INTERVAL, 50). % ms
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% INITIALISATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -17,6 +17,7 @@ robot_init() ->
     process_flag(priority, max),
     log_buffer:add({main_loop, erlang:system_time(millisecond), calibrating}),
     calibrate(),
+
     {X0, P0} = kalman_computations:init_kalman(),
     log_buffer:add({main_loop, erlang:system_time(millisecond), done_calibrating}),
 
@@ -25,7 +26,7 @@ robot_init() ->
     persistent_term:put(i2c, I2Cbus),
 
     % PIDs initialization with adjusted gains
-    Pid_Speed = spawn(hera_pid_controller, pid_init, [-0.0635, -0.053, 0.0, -1, 15.0, 0.0]), 
+    Pid_Speed = spawn(hera_pid_controller, pid_init, [-0.071, -0.053, 0.0, -1, 15.0, 0.0]), 
     Pid_Stability = spawn(hera_pid_controller, pid_init, [16.3, 0.0, 9.4, -1, -1, 0.0]), 
     persistent_term:put(controllers, {Pid_Speed, Pid_Stability}),
     persistent_term:put(freq_goal, 210.0),
@@ -64,7 +65,7 @@ robot_loop(State) ->
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN LOGIC %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     Acc_Prev = maps:get(acc_prev, State),
-    {Angle, X1, P1} = kalman_message_handling(Xk, Pk, Acc_Prev, Dt, DoLog),
+    {Angle, X1, P1, Old_X1, Old_P1} = kalman_message_handling(Xk, Pk, Acc_Prev, Dt, DoLog),
     T_Kalman = erlang:system_time(microsecond),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% INPUT FROM I2C + CONTROLS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -334,7 +335,7 @@ kalman_message_handling(Xk, Pk, Acc_Prev, Dt, DoLog) ->
             %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN PREDICTION + CORRECTION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
             [Angle1, {X1a, P1a}] = kalman_computations:kalman_angle(Dt, Ax, Az, Gy, Acc_SI, Xk, Pk),
 
-            %%%%%%%%%%%%%%%%%%%%%%%%%%%%% MEASURED DIRECT ANGLE  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+            %%%%%%%%%%%%%%%%%%%%%%%%%%%%% MEASURED DIRECT ANGLE & OLD KALMAN %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
             Direct_angle = math:atan(Az / (-Ax)) * ?RAD_TO_DEG,
             add_log({main_loop, erlang:system_time(millisecond), kalman_comparison, [Angle1, Direct_angle]}, DoLog),
             {Angle1, X1a, P1a}
@@ -347,6 +348,8 @@ kalman_message_handling(Xk, Pk, Acc_Prev, Dt, DoLog) ->
 kalman_predict_only(Xk, Pk, Dt, DoLog, Acc_SI) ->
     % Kalman prediction
     [Angle1, {X1a, P1a}] = kalman_computations:kalman_predict_only(Dt, [Xk, Pk], Acc_SI),
+
+    % Kalman comparison
     add_log({main_loop, erlang:system_time(millisecond), kalman_comparison_predict_only, [Angle1]}, DoLog),
     {Angle1, X1a, P1a}.
 
