@@ -11,7 +11,7 @@
 -define(MIN_SONAR_DIST, 0.35).   
 -define(MAX_SONAR_DIST, 0.55).   
 
--define(ANGLE_OFFSET, 0.6).
+-define(ANGLE_OFFSET, 0.0).
 
 controller({Dt, Angle, Speed}, {Sonar_Data, Direction}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal, Turn_V_Ref}, DoLog) ->
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% CONTROLLER %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
