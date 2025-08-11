@@ -64,7 +64,7 @@ init_grisp(0) ->
     add_GRISP_device(spi2, pmod_nav),
     add_GRISP_device(uart, pmod_maxsonar),
     pmod_nav:config(acc, #{odr_g => {hz,238}}),
-    timer:sleep(2000),
+    timer:sleep(10000),
 
     log_buffer:add({balancing_robot, erlang:system_time(millisecond), robot_main}),
     Pid_Main = spawn(main_loop, robot_init, []),
