@@ -4,7 +4,6 @@
 
 -define(RAD_TO_DEG, 180.0/math:pi()).
 
-
 -define(ADV_V_MAX, 24.0).
 -define(TURN_V_MAX, 80.0).
 -define(LOG_INTERVAL, 50). % ms
@@ -15,30 +14,25 @@
 
 robot_init() ->
     process_flag(priority, max),
-    log_buffer:add({main_loop, erlang:system_time(millisecond), calibrating}),
     calibrate(),
-
     {X0, P0} = kalman_computations:init_kalman(),
-    log_buffer:add({main_loop, erlang:system_time(millisecond), done_calibrating}),
 
     %I2C bus
     I2Cbus = grisp_i2c:open(i2c1),
     persistent_term:put(i2c, I2Cbus),
 
     % PIDs initialization with adjusted gains
-    Pid_Speed = spawn(hera_pid_controller, pid_init, [-0.071, -0.053, 0.0, -1, 15.0, 0.0]), 
+    Pid_Speed = spawn(hera_pid_controller, pid_init, [-0.0635, -0.053, 0.0, -1, 15.0, 0.0]), 
     Pid_Stability = spawn(hera_pid_controller, pid_init, [16.3, 0.0, 9.4, -1, -1, 0.0]), 
     persistent_term:put(controllers, {Pid_Speed, Pid_Stability}),
-    persistent_term:put(freq_goal, 210.0),
+    persistent_term:put(freq_goal, 220.0),
 
     T0 = erlang:system_time()/1.0e6,
-    log_buffer:add({main_loop, erlang:system_time(millisecond), robot_ready}),
-
     State = #{
         robot_state => {rest, false}, % {Robot_State, Robot_Up}
         kalman_state => {T0, X0, P0}, % {Tk, Xk, Pk}
         move_speed => {0.0, 0.0}, % {Adv_V_Ref, Turn_V_Ref}
-        frequency => {0, 0, 200.0, T0}, % {N, Freq, Mean_Freq, T_End}
+        frequency => {0, 0, 220.0, T0}, % {N, Freq, Mean_Freq, T_End}
         acc_prev => 0.0, % Acc_Prev
         sonar => {0, none, none}, % {Current_Seq, Prev_Dist, Prev_Direction}
         last_log_time => erlang:system_time(millisecond) % LastLog
@@ -47,6 +41,7 @@ robot_init() ->
     robot_loop(State).
 
 robot_loop(State) ->
+    Start_log = erlang:system_time(millisecond),
     Start = erlang:system_time(microsecond),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Dt Computation %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -60,12 +55,12 @@ robot_loop(State) ->
     {Robot_State, Robot_Up} = maps:get(robot_state, State),
     {DoLog, New_LastLog} = logging(T1, LastLog),
     {N, Freq, Mean_Freq, T_End} = maps:get(frequency, State),
-    add_log({main_loop, erlang:system_time(millisecond), robot_frequency, [Freq, N, Mean_Freq]}, DoLog),
+    add_log({main_loop, Start_log, robot_frequency, [Freq, N, Mean_Freq]}, DoLog),
     T_Log = erlang:system_time(microsecond),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN LOGIC %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     Acc_Prev = maps:get(acc_prev, State),
-    {Angle, X1, P1, Old_X1, Old_P1} = kalman_message_handling(Xk, Pk, Acc_Prev, Dt, DoLog),
+    {Angle, X1, P1} = kalman_message_handling(Xk, Pk, Acc_Prev, Dt),
     T_Kalman = erlang:system_time(microsecond),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% INPUT FROM I2C + CONTROLS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -88,7 +83,7 @@ robot_loop(State) ->
         {Sonar_Data, New_Direction},
         {Adv_V_Goal, Adv_V_Ref},
         {Turn_V_Goal, Turn_V_Ref},
-        DoLog),
+        {DoLog, Start_log}),
     T_Controller = erlang:system_time(microsecond),
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% ROBOT STATE + I2C WRITE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -122,19 +117,19 @@ robot_loop(State) ->
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% TIMING LOGS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     Total = T_State - Start,
-    add_log({timing, erlang:system_time(millisecond), [
-        {"Dt", T_Dt - Start},
-        {"Logging", T_Log - T_Dt},
-        {"Kalman", T_Kalman - T_Log},
-        {"I2C_Read+Controls", T_I2C - T_Kalman},
-        {"Sonar", T_Sonar - T_I2C},
-        {"Controller", T_Controller - T_Sonar},
-        {"I2C_Write+State", T_Write - T_Controller},
-        {"Frequency_Stab", T_Freq - T_Write},
-        {"Server", T_Server - T_Freq},
-        {"State_Update", T_State - T_Server},
-        {"Total", Total}
-    ]}, DoLog),
+    % add_log({timing, erlang:system_time(millisecond), [
+    %     {"Dt", T_Dt - Start},
+    %     {"Logging", T_Log - T_Dt},
+    %     {"Kalman", T_Kalman - T_Log},
+    %     {"I2C_Read+Controls", T_I2C - T_Kalman},
+    %     {"Sonar", T_Sonar - T_I2C},
+    %     {"Controller", T_Controller - T_Sonar},
+    %     {"I2C_Write+State", T_Write - T_Controller},
+    %     {"Frequency_Stab", T_Freq - T_Write},
+    %     {"Server", T_Server - T_Freq},
+    %     {"State_Update", T_State - T_Server},
+    %     {"Total", Total}
+    % ]}, DoLog),
 
     robot_loop(NewState).
 
@@ -159,7 +154,7 @@ get_robot_state(Robot_State) -> % {Robot_state, Robot_Up, Get_Up, Arm_ready, Ang
 
         % Static → dynamic
         {static, false, _, _, _} -> rest;
-        {static, _, false, _, _} -> dynamic;
+        {static, _, false, _, _} -> dynamic;    
         {static, _, _, _, _} -> static
     end.
 
@@ -318,7 +313,7 @@ sonar_message_handling(Current_Seq, Prev_Dist, Prev_Direction) ->
                 robot_front_left -> front;
                 robot_front_right -> front;
                 _ -> back
-            end,
+            end,    
             {D_M, Seq, Direction}
     after 0 ->
         {Prev_Dist, Current_Seq, Prev_Direction}
@@ -327,7 +322,7 @@ sonar_message_handling(Current_Seq, Prev_Dist, Prev_Direction) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-kalman_message_handling(Xk, Pk, Acc_Prev, Dt, DoLog) ->
+kalman_message_handling(Xk, Pk, Acc_Prev, Dt) ->
     Acc_SI = Acc_Prev / 100.0, % Convert acceleration from cm/s^2 to m/s^2
     {Angle, X1, P1} = 
     receive 
@@ -335,22 +330,17 @@ kalman_message_handling(Xk, Pk, Acc_Prev, Dt, DoLog) ->
             %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% KALMAN PREDICTION + CORRECTION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
             [Angle1, {X1a, P1a}] = kalman_computations:kalman_angle(Dt, Ax, Az, Gy, Acc_SI, Xk, Pk),
 
-            %%%%%%%%%%%%%%%%%%%%%%%%%%%%% MEASURED DIRECT ANGLE & OLD KALMAN %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-            Direct_angle = math:atan(Az / (-Ax)) * ?RAD_TO_DEG,
-            add_log({main_loop, erlang:system_time(millisecond), kalman_comparison, [Angle1, Direct_angle]}, DoLog),
             {Angle1, X1a, P1a}
     after 0 ->
-        kalman_predict_only(Xk, Pk, Dt, DoLog, Acc_SI) 
+        kalman_predict_only(Xk, Pk, Dt, Acc_SI) 
     end,
     {Angle, X1, P1}.
 
 
-kalman_predict_only(Xk, Pk, Dt, DoLog, Acc_SI) ->
+kalman_predict_only(Xk, Pk, Dt, Acc_SI) ->
     % Kalman prediction
     [Angle1, {X1a, P1a}] = kalman_computations:kalman_predict_only(Dt, [Xk, Pk], Acc_SI),
 
-    % Kalman comparison
-    add_log({main_loop, erlang:system_time(millisecond), kalman_comparison_predict_only, [Angle1]}, DoLog),
     {Angle1, X1a, P1a}.
 
 calibrate() ->

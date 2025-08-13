@@ -2,7 +2,7 @@
 
 -behavior(application).
 
--export([start/2, stop/1, dump_logs/0]).
+-export([start/2, stop/1]).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% STARTUP
@@ -13,8 +13,7 @@ start(_Type, _Args) ->
     [grisp_led:flash(L, yellow, 500) || L <- [1, 2]],
 
     %% Initialize log buffer
-    log_buffer:init(10000),
-    log_buffer:add({balancing_robot, erlang:system_time(millisecond), startup}),
+    log_buffer:init(100000),
 
     numerl:init(),
     hera_subscribe:subscribe(self()),
@@ -43,11 +42,8 @@ stop(_State) ->
         _ ->
             ok
     end,
-    dump_logs(),
     ok.
 
-dump_logs() ->
-    log_buffer:dump_to_console().
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% INITIALIZATION
@@ -66,11 +62,11 @@ init_grisp(0) ->
     pmod_nav:config(acc, #{odr_g => {hz,238}}),
     timer:sleep(10000),
 
-    log_buffer:add({balancing_robot, erlang:system_time(millisecond), robot_main}),
     Pid_Main = spawn(main_loop, robot_init, []),
     persistent_term:put(pid_main, Pid_Main),
     
     %% Start sonar scheduler
+    persistent_term:put(current_sonar, robot_front_left),
     start_sonar_scheduler(), 
 
     spawning_sonar(0, robot_main),
@@ -89,8 +85,7 @@ init_grisp(2) ->
     spawning_sonar(2, robot_front_right);
 
 init_grisp(_) ->
-    io:format("[BALANCING_ROBOT][ERROR] Unknown GRiSP ID~n", []),
-    log_buffer:add({balancing_robot, erlang:system_time(millisecond), unknown_id}).
+    io:format("[BALANCING_ROBOT][ERROR] Unknown GRiSP ID~n", []).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% DEVICES
@@ -116,7 +111,6 @@ get_grisp_id() ->
     {ok, lists:foldl(fun(B, Acc) -> (Acc bsl 1) + B end, 0, lists:reverse(Bits))}.
 
 spawning_sonar(Id, Role) ->
-    log_buffer:add({balancing_robot, erlang:system_time(millisecond), Role}),
     {ok, Pid_Sonar} = hera:start_measure(sonar_measure, [Role]),
     persistent_term:put(pid_sonar, Pid_Sonar),
     io:format("[BALANCING_ROBOT] GRiSP ~p spawned ~p (PID: ~p)~n",
@@ -227,7 +221,7 @@ start_sonar_scheduler() ->
 
 sonar_scheduler() ->
     receive
-        after 50 -> % run every 50 ms
+        after 75 -> % run every 50 ms
             [{adv_goal, Adv_V_Goal}] = ets:lookup(adv_goal_tab, adv_goal),
             handle_sonar_authorization(Adv_V_Goal),
             sonar_scheduler()
@@ -240,7 +234,7 @@ handle_sonar_authorization(Adv_V_Goal) ->
             persistent_term:get(pid_sonar) ! {authorize, persistent_term:get(pid_main)};
         V when V < 0 ->
             % Avance : alternate front_left / front_right
-            Sonar_Role = persistent_term:get(current_sonar, robot_front_left),
+            Sonar_Role = persistent_term:get(current_sonar),
             Next_Role = case Sonar_Role of
                 robot_front_left  -> robot_front_right;
                 robot_front_right -> robot_front_left
