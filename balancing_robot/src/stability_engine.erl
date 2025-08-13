@@ -2,25 +2,24 @@
 
 -export([controller/5]).
 
--define(ADV_V_MAX, 32.0).
+-define(ADV_V_MAX, 24.0).
 -define(ADV_ACCEL, 8.0).
 
--define(TURN_V_MAX, 80.0).
--define(TURN_ACCEL, 400.0).
+-define(TURN_V_MAX, 40.0).
+-define(OBSTACLE_TURN_V_MAX, 80.0).
+-define(TURN_ACCEL, 200.0).
 
--define(MIN_SONAR_DIST, 0.35).   
--define(MAX_SONAR_DIST, 0.55).   
+-define(MIN_SONAR_DIST, 0.30).   
+-define(MAX_SONAR_DIST, 0.65).   
 
--define(ANGLE_OFFSET, 0.0).
-
-controller({Dt, Angle, Speed}, {Sonar_Data, Direction}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal, Turn_V_Ref}, DoLog) ->
+controller({Dt, Angle, Speed}, {Sonar_Data, Direction}, {Adv_V_Goal, Adv_V_Ref}, {Turn_V_Goal, Turn_V_Ref}, {DoLog, Time}) ->
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% CONTROLLER %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     {Pid_Speed, Pid_Stability} = persistent_term:get(controllers),
 
     % Évitement automatique si bloqué
     Turn_V_Goal_Avoid =
         case Sonar_Data =< ?MIN_SONAR_DIST andalso (Adv_V_Goal > 0 orelse Adv_V_Goal < 0) of
-            true -> ?TURN_V_MAX;  % tourne à droite (ou -?TURN_V_MAX à gauche)
+            true -> ?OBSTACLE_TURN_V_MAX;  % tourne à droite (ou -?TURN_V_MAX à gauche)
             false -> Turn_V_Goal
         end,
 
@@ -55,14 +54,13 @@ controller({Dt, Angle, Speed}, {Sonar_Data, Direction}, {Adv_V_Goal, Adv_V_Ref},
     receive {_, {control, Target_Angle}} -> ok end,
     
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% STABILITY CONTROLLER %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    Corrected_Angle = Angle - ?ANGLE_OFFSET,
     Pid_Stability ! {self(), {set_point, Target_Angle}},
-    Pid_Stability ! {self(), {input, Corrected_Angle}},
+    Pid_Stability ! {self(), {input, Angle}},
     receive {_, {control, Acc}} -> ok end,
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% LOGGING %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    add_log({controller, erlang:system_time(millisecond), speed_controller, [Adv_V_Ref_New, Speed, Target_Angle]}, DoLog),
-    add_log({controller, erlang:system_time(millisecond), stability_controller, [Target_Angle, Corrected_Angle, Acc]}, DoLog),
+    add_log({controller, Time, speed_controller, [Adv_V_Ref_New, Turn_V_Ref_New, Speed, Target_Angle]}, DoLog),
+    add_log({controller, Time, stability_controller, [Target_Angle, Angle, Acc]}, DoLog),
     
     {Acc, Adv_V_Ref_New, Turn_V_Ref_New}.
 
