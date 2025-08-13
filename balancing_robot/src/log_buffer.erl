@@ -1,55 +1,34 @@
 -module(log_buffer).
--export([init/1, add/1, dump_to_console/0, flush_to_server/2]).
+-export([init/1, add/1, flush_to_server/2]).
 
+%% Create two ETS tables: one for logs, one for metadata (max, idx)
 init(MaxSize) ->
-    ets:new(logs, [named_table, set, public]),
-    persistent_term:put(log_max, MaxSize),
-    persistent_term:put(log_index, 0).
+    ets:new(logs,     [named_table, set, public]),
+    ets:new(log_meta, [named_table, set, public]),
+    ets:insert(log_meta, {max, MaxSize}),
+    ets:insert(log_meta, {count, 0}),
+    %% Start idx at -1 so first increment yields 0
+    ets:insert(log_meta, {idx, -1}).
+    
 
 add(Entry) ->
-    Max = persistent_term:get(log_max),
-    Index = persistent_term:get(log_index),
-    NewIndex = (Index + 1) rem Max,
+    [{max, Max}] = ets:lookup(log_meta, max),
+    NewIndex = ets:update_counter(log_meta, idx, {2, 1, Max, 0}),
     ets:insert(logs, {NewIndex, Entry}),
-    persistent_term:put(log_index, NewIndex).
+    _ = ets:update_counter(log_meta, count, {2, 1, Max, Max}), % saturating at Max
+    ok.
 
 dump() ->
-    L = ets:tab2list(logs),
-    lists:sort(
-        fun({_, Entry1}, {_, Entry2}) ->
-            TS1 = get_timestamp(Entry1),
-            TS2 = get_timestamp(Entry2),
-            TS1 < TS2
-        end, L).
-
-get_timestamp({_, TS, _, _}) -> TS;
-get_timestamp({_, TS, _, _, _}) -> TS;
-get_timestamp({_, TS}) -> TS;
-get_timestamp(Entry) when is_tuple(Entry), tuple_size(Entry) >= 2 -> element(2, Entry).
-
-%% Dumps all logs to console in order
-dump_to_console() ->
-    L = dump(),
-    lists:foreach(fun({Index, Entry}) ->
-        case Entry of
-            {Level, Timestamp, Category, Message} ->
-                CatStr = to_string(Category),
-                MsgStr = to_string(Message),
-                io:format("[~s] ~p | ~s | ~s~n",
-                          [string:to_upper(atom_to_list(Level)), Timestamp, CatStr, MsgStr]);
-            {Level, Timestamp, Message} ->
-                MsgStr = to_string(Message),
-                io:format("[~s] ~p | ~s~n",
-                          [string:to_upper(atom_to_list(Level)), Timestamp, MsgStr]);
-            {Level, Timestamp} ->
-                io:format("[~s] ~p~n",
-                          [string:to_upper(atom_to_list(Level)), Timestamp]);
-            _ ->
-                io:format("~p~n", [Entry])
-        end,
-        ets:delete(logs, Index)  %% <-- delete the entry after printing
-    end, L).
-
+    [{idx, Last}]   = ets:lookup(log_meta, idx),
+    [{count, Cnt}]  = ets:lookup(log_meta, count),
+    [{max, Max}]    = ets:lookup(log_meta, max),
+    case Cnt of
+        0 -> [];
+        _ ->
+            Start = ((Last - Cnt + 1) rem Max + Max) rem Max,
+            Indices = [((Start + I) rem Max) || I <- lists:seq(0, Cnt - 1)],
+            [ {I, E} || I <- Indices, [{I, E}] <- [ets:lookup(logs, I)] ]
+    end.
 
 to_string(Value) when is_binary(Value) ->
     binary_to_list(Value);
