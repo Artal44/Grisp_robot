@@ -13,8 +13,7 @@ init([Role]) ->
     State = #{
         seq => 1,
         role => Role, 
-        last_distance => none,
-        hampel_buffer => []
+        last_distance => none
     },                 
     {ok, State, #{name => Name, iter => infinity, timeout => 50}} .
 
