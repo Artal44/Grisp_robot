@@ -35,12 +35,13 @@ pred_timestamps = [(t - entries_kalman[0][0]) / 1000.0 for (t, _) in entries_pre
 pred_kalman_new = [x for (_, x) in entries_pred]
 
 # === Graphique principal : NEW vs OLD sur le même axe ===
-plt.figure(figsize=(12, 5))
-plt.plot(timestamps, kalman_new, label='NEW Kalman')
-plt.plot(timestamps, measured, label='Measured', linestyle='--', alpha=0.6)
+plt.figure(figsize=(6, 4))
+plt.plot(timestamps, kalman_new, label='Pitch Angle')
+# plt.plot(timestamps, measured, label='Measured', linestyle='--', alpha=0.6)
 plt.xlabel('Time (s)')
-plt.ylabel('Angle (°)')
-plt.title('Kalman NEW vs OLD (avec Measured)')
+plt.ylabel('Angle (deg)')
+ #plt.ylim(0, 1)
+# plt.xlim(45,60)
 plt.legend()
 plt.grid(True, linestyle=':', linewidth=0.6, alpha=0.7)
 plt.tight_layout()

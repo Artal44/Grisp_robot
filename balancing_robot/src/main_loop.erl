@@ -2,8 +2,6 @@
 
 -export([robot_init/0]).
 
--define(RAD_TO_DEG, 180.0/math:pi()).
-
 -define(ADV_V_MAX, 24.0).
 -define(TURN_V_MAX, 80.0).
 -define(LOG_INTERVAL, 50). % ms
@@ -117,19 +115,19 @@ robot_loop(State) ->
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% TIMING LOGS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     Total = T_State - Start,
-    % add_log({timing, erlang:system_time(millisecond), [
-    %     {"Dt", T_Dt - Start},
-    %     {"Logging", T_Log - T_Dt},
-    %     {"Kalman", T_Kalman - T_Log},
-    %     {"I2C_Read+Controls", T_I2C - T_Kalman},
-    %     {"Sonar", T_Sonar - T_I2C},
-    %     {"Controller", T_Controller - T_Sonar},
-    %     {"I2C_Write+State", T_Write - T_Controller},
-    %     {"Frequency_Stab", T_Freq - T_Write},
-    %     {"Server", T_Server - T_Freq},
-    %     {"State_Update", T_State - T_Server},
-    %     {"Total", Total}
-    % ]}, DoLog),
+    add_log({timing, erlang:system_time(millisecond), [
+        {"Dt", T_Dt - Start},
+        {"Logging", T_Log - T_Dt},
+        {"Kalman", T_Kalman - T_Log},
+        {"I2C_Read+Controls", T_I2C - T_Kalman},
+        {"Sonar", T_Sonar - T_I2C},
+        {"Controller", T_Controller - T_Sonar},
+        {"I2C_Write+State", T_Write - T_Controller},
+        {"Frequency_Stab", T_Freq - T_Write},
+        {"Server", T_Server - T_Freq},
+        {"State_Update", T_State - T_Server},
+        {"Total", Total}
+    ]}, DoLog),
 
     robot_loop(NewState).
 

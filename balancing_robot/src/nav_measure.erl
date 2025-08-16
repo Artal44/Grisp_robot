@@ -9,7 +9,7 @@ init([Pid, Role]) ->
     {ok, #{seq => 1, target => Pid, role => Role}, #{
         name => Name,
         iter => infinity,
-        timeout => 5 % ODR is 238 Hz, the sensor updates every ~4.2 ms.
+        timeout => 5
       }}.
 
 measure(State) ->
